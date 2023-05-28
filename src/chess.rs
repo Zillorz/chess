@@ -289,7 +289,9 @@ impl EnPassant {
     }
 
     pub(crate) fn pawn_lost_pos(self) -> usize {
-        self.location() + 8
+        if self.location() > 24 {
+            self.location() - 8
+        } else { self.location() + 8 }
     }
 }
 
