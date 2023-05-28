@@ -578,7 +578,6 @@ impl Game {
                 escapable |= legal_move_wcheck(spos, *ts);
 
                 if escapable {
-                    dbg!(spos, ts);
                     break;
                 }
             }
