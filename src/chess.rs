@@ -818,7 +818,7 @@ impl Game {
 
             let dir = (ny - oy).is_positive() ^ (piece == Piece::BPawn);
 
-            if !(take || en_passant || regular || first || dir) {
+            if !(take || en_passant || regular || first) || !dir {
                 return MoveResult::Illegal;
             }
         } else if (piece == Piece::BKing || piece == Piece::WKing) && (nx - ox).abs() == 2 && ny == oy {
