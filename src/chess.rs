@@ -289,13 +289,7 @@ impl EnPassant {
     }
 
     pub(crate) fn pawn_lost_pos(self) -> usize {
-        let loc = self.location();
-
-        if 16 > loc {
-            loc + 8
-        } else {
-            loc - 8
-        }
+        self.location() + 8
     }
 }
 
@@ -421,8 +415,8 @@ impl Game {
         let turn = parts.next()?;
         let castle = parts.next()?;
         let en_passant = parts.next()?;
-        let hm = parts.next()?;
-        let fm = parts.next()?;
+        let hm = parts.next().unwrap_or("0");
+        let fm = parts.next().unwrap_or("1");
 
         let mut cle = CastleFlags::NONE;
         for i in castle.chars() {
@@ -583,7 +577,10 @@ impl Game {
             for ts in &threat_squares {
                 escapable |= legal_move_wcheck(spos, *ts);
 
-                if escapable { break; }
+                if escapable {
+                    dbg!(spos, ts);
+                    break;
+                }
             }
         }
 
@@ -638,7 +635,7 @@ impl Game {
         // No legal moves
         true
     }
-
+    
     pub(crate) fn all_legal_moves(&self, loc: usize) -> Vec<usize> {
         let Some(piece) = self.board[loc] else {
             return Vec::new();
@@ -670,26 +667,18 @@ impl Game {
 
         let loc = loc as isize;
         match piece {
-            // try move twice, move once, take, and en passant
+            // try move twice, move once, take, and en passant (regular taking moves check for en passant!)
             Piece::WPawn  => {
                 test_move(loc + 8);
                 test_move(loc + 16);
                 test_move(loc + 7);
                 test_move(loc + 9);
-
-                if let Some(en_passant) = self.en_passant {
-                    test_move(en_passant.location() as isize);
-                }
             }
             Piece::BPawn => {
                 test_move(loc - 8);
                 test_move(loc - 16);
                 test_move(loc - 7);
                 test_move(loc - 9);
-
-                if let Some(en_passant) = self.en_passant {
-                    test_move(en_passant.location() as isize);
-                }
             }
             // try all knight moves
             Piece::WKnight | Piece::BKnight => {
@@ -828,7 +817,9 @@ impl Game {
             let occupied = self.board[((oy + (ny - oy).signum()) * 8 + ox) as usize].is_some() || self.board[to].is_some();
             let first = ry == 2 && rx == 0 && ((piece == Piece::BPawn && oy == 6)  || (piece == Piece::WPawn && oy == 1)) && !occupied;
 
-            if !(take || en_passant || regular || first) {
+            let dir = (ny - oy).is_positive() ^ (piece == Piece::BPawn);
+
+            if !(take || en_passant || regular || first || dir) {
                 return MoveResult::Illegal;
             }
         } else if (piece == Piece::BKing || piece == Piece::WKing) && (nx - ox).abs() == 2 && ny == oy {
