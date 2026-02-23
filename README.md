@@ -26,9 +26,15 @@ the engine is any uci compatible engine, called from uci.bat
 release build is setup with MAIA 1900, an engine meant to act like a human player with around 1900 elo
 
 
-Preview:
+### Preview:
 
 ![image](https://user-images.githubusercontent.com/78161200/231024568-39055bd8-e8ae-4a7f-b516-4cbf2aa3ef51.png)
 
 ![output](https://user-images.githubusercontent.com/78161200/231025973-992ef953-dcf1-43f7-a004-9a595cdaadf4.gif)
 Blurry lines are a product of gif compression, they don't show in the application
+
+
+### Building
+On windows, either provide the texture files and engine or download them from the newest release.
+
+On linux/mac os, download the texture files from the newest release and the engine seperatly. Should run fine in two-player mode without the engine.
