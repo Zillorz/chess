@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::num::{NonZeroU64, NonZeroU8};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
@@ -94,10 +95,25 @@ pub struct Uci {
 }
 
 impl Uci {
+    #[cfg(windows)]
     pub(crate) fn new() -> Self {
         let mut child = Command::new("cmd")
             .args(["/C", "uci.bat"])
             .creation_flags(0x08000000)
+            .stdout(Stdio::piped())
+            .stdin(Stdio::piped())
+            .spawn().unwrap();
+
+        writeln!(child.stdin.as_mut().unwrap(), "uci").unwrap();
+        Uci {
+            process: child
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn new() -> Self {
+        let mut child = Command::new("bash")
+            .args(["uci.sh"])
             .stdout(Stdio::piped())
             .stdin(Stdio::piped())
             .spawn().unwrap();

@@ -88,20 +88,20 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
     let square_1 = load_texture("assets/square_1.png").await.unwrap();
     let square_2 = load_texture("assets/square_2.png").await.unwrap();
 
-    let get_texture = |piece: Piece| -> Texture2D {
+    let get_texture = |piece: Piece| -> &Texture2D {
         match piece {
-            Piece::WPawn => { wp }
-            Piece::WKnight => { wn }
-            Piece::WBishop => { wb }
-            Piece::WRook => { wr }
-            Piece::WQueen => { wq }
-            Piece::WKing => { wk }
-            Piece::BPawn => { bp }
-            Piece::BKnight => { bn }
-            Piece::BBishop => { bb }
-            Piece::BRook => { br }
-            Piece::BQueen => { bq }
-            Piece::BKing => { bk }
+            Piece::WPawn => { &wp }
+            Piece::WKnight => { &wn }
+            Piece::WBishop => { &wb }
+            Piece::WRook => { &wr }
+            Piece::WQueen => { &wq }
+            Piece::WKing => { &wk }
+            Piece::BPawn => { &bp }
+            Piece::BKnight => { &bn }
+            Piece::BBishop => { &bb }
+            Piece::BRook => { &br }
+            Piece::BQueen => { &bq }
+            Piece::BKing => { &bk }
         }
     };
 
@@ -139,9 +139,11 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
 
     let mut promotion_square: Option<usize> = None;
 
-    let handle_move = |a1: Option<Animation>, a2: Option<Animation>, mut sound: Sound, res: MoveResult,
+    let handle_move = |a1: Option<Animation>, a2: Option<Animation>, mut sound: &Sound, res: MoveResult,
                        game: &Game, animations: &mut Vec<Animation>, winner: &mut Option<chess::Color>, draw: &mut bool| {
         if !res.is_ok() { return; }
+
+        let mut play_check_sound = false; 
 
         if res == MoveResult::Checkmate { *winner = Some(!game.turn); }
         else if res == MoveResult::Check {
@@ -153,14 +155,14 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
             let ca = check_animation(game.turn, ((px as f32 + 0.5) * square_size, (py as f32 + 0.5) * square_size), square_size / 2.0);
             animations.push(ca);
 
-            sound = check_sound;
+            play_check_sound = true;
         } else if res == MoveResult::Stalemate || res == MoveResult::Draw {
             *draw = true;
         }
 
         if let Some(a) = a1 { animations.push(a); }
         if let Some(a) = a2 { animations.push(a); }
-        play_sound_once(sound);
+        play_sound_once(if play_check_sound { &check_sound } else { sound });
     };
 
     loop {
@@ -170,12 +172,12 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
             if let Some((s_pos, e_pos, pr, alg)) = sf.try_result() {
                 let a1 = primary_animation(&game, s_pos, e_pos, rp, bp);
                 let a2 = secondary_animation(&game, s_pos, e_pos, rp, bp);
-                let mut sound = get_sound(&game, s_pos, e_pos, sounds);
+                let mut sound = get_sound(&game, s_pos, e_pos, &sounds);
 
                 let res = game.move_checked(s_pos, e_pos, pr);
                 assert!(res.is_ok(), "Move {} was illegal at fen={}", alg, game.as_fen());
 
-                handle_move(a1, a2, sound, res, &game, &mut animations, &mut winner, &mut draw);
+                handle_move(a1, a2, &sound, res, &game, &mut animations, &mut winner, &mut draw);
             }
         }
 
@@ -185,9 +187,9 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
 
             for ix in 0..8 {
                 if (iy + ix) % 2 == 0 {
-                    draw_texture(square_2, x, y, WHITE);
+                    draw_texture(&square_2, x, y, WHITE);
                 } else {
-                    draw_texture(square_1, x, y, WHITE);
+                    draw_texture(&square_1, x, y, WHITE);
                 }
 
                 x += square_size;
@@ -243,7 +245,7 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
                 }
 
                 if let Some(piece) = piece {
-                    draw_texture(get_texture(piece), dx, dy, WHITE);
+                    draw_texture(&get_texture(piece), dx, dy, WHITE);
                 }
             }
         }
@@ -262,7 +264,8 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
                 let mut of = 32;
                 for i in PROMOTIONS {
                     let piece = Piece::from_promotion(i, color);
-                    draw_texture(get_texture(piece),
+                    let texture = get_texture(piece);
+                    draw_texture(&texture,
                                  dx, dy, WHITE);
 
                     of -= 8;
@@ -279,7 +282,7 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
                 let mut of = 32;
                 for i in PROMOTIONS {
                     let piece = Piece::from_promotion(i, color);
-                    draw_texture(get_texture(piece),
+                    draw_texture(&get_texture(piece),
                                  dx, dy, WHITE);
 
                     of -= 8;
@@ -312,7 +315,7 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
                     let ca = check_animation(game.turn, ((px as f32 + 0.5) * square_size, (py as f32 + 0.5) * square_size), square_size / 2.0);
                     animations.push(ca);
 
-                    play_sound_once(check_sound);
+                    play_sound_once(&check_sound);
                 } else if game.is_draw() || game.is_stalemate() {
                     draw = true;
                 }
@@ -335,7 +338,7 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
 
                 let a1 = primary_animation(&game, s_pos, e_pos, rp, bp);
                 let a2 = secondary_animation(&game, s_pos, e_pos, rp, bp);
-                let mut sound = get_sound(&game, s_pos, e_pos, sounds);
+                let mut sound = get_sound(&game, s_pos, e_pos, &sounds);
 
                 let res = game.move_checked(s_pos, e_pos, None);
                 if res.is_ok() {
@@ -417,7 +420,7 @@ struct Animation {
 }
 
 impl Animation {
-    fn draw_frame(&mut self, texture_provider: impl FnOnce(Piece) -> Texture2D) -> bool {
+    fn draw_frame<'a>(&mut self, texture_provider: impl FnOnce(Piece) -> &'a Texture2D) -> bool {
         self.remaining_time -= get_frame_time();
 
         if 0.0 >= self.remaining_time {
@@ -543,23 +546,23 @@ fn check_animation(color: chess::Color, center: (f32, f32), radius: f32) -> Anim
     }
 }
 
-fn get_sound(game: &Game, from: usize, to: usize, sounds: [Sound; 3]) -> Sound {
-    let Some(piece) = game.board[from] else { return sounds[0]; };
+fn get_sound<'a, 'b>(game: &'b Game, from: usize, to: usize, sounds: &'a [Sound; 3]) -> &'a Sound {
+    let Some(piece) = game.board[from] else { return &sounds[0]; };
 
     // check if move is en_passant
     if let Some(en_passant) = game.en_passant {
         if en_passant.location() == to && (piece == Piece::BPawn || piece == Piece::WPawn) {
-            return sounds[1];
+            return &sounds[1];
         }
     }
 
     if (piece == Piece::BKing || piece == Piece::WKing) && (to % 8).abs_diff(from % 8) == 2 {
-        return sounds[2];
+        return &sounds[2];
     }
 
     if let Some(taken) = game.board[to] {
-        return sounds[1];
+        return &sounds[1];
     }
 
-    sounds[0]
+    &sounds[0]
 }
