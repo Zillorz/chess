@@ -924,7 +924,7 @@ impl Game {
         let mut test_move = |rx: isize, ry: isize| -> Legality {
             let (x, y) = (rx + start.0, ry + start.1);
 
-            let legal = self.is_legal(start, (rx, ry));
+            let legal = self.is_legal(start, (x, y));
             if legal == Legality::Legal {
                 list.push((x, y));
             }

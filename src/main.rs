@@ -1,10 +1,10 @@
 #![warn(clippy::pedantic)]
-#![windows_subsystem = "windows"]
+// #![windows_subsystem = "windows"]
 
 mod chess;
 mod uci;
 
-use macroquad::audio::{Sound, load_sound};
+use macroquad::audio::{Sound, load_sound, play_sound_once};
 use macroquad::{Error, hash};
 use std::collections::HashMap;
 
@@ -104,7 +104,11 @@ struct GuiGame {
 }
 
 impl GuiGame {
-    async fn load_from_files(two_player: bool, player_color: chess::Color, flipped: bool) -> Result<Self, Error> {
+    async fn load_from_files(
+        two_player: bool,
+        player_color: chess::Color,
+        flipped: bool,
+    ) -> Result<Self, Error> {
         let piece_textures = HashMap::from([
             (Piece::WPawn, load_texture("assets/wP.png").await?),
             (Piece::WKnight, load_texture("assets/wN.png").await?),
@@ -173,12 +177,10 @@ impl GuiGame {
             + self.top_left.y
     }
 
-
     #[allow(clippy::cast_possible_truncation)]
     fn get_x(&self, px: f32) -> isize {
         ((px - self.top_left.x) / (self.size / 8.)) as isize
     }
-
 
     #[allow(clippy::cast_possible_truncation)]
     fn get_y(&self, py: f32) -> isize {
@@ -192,7 +194,9 @@ impl GuiGame {
 
 async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) {
     let mut game = Game::default();
-    let mut ctx = GuiGame::load_from_files(two_player, player_color, flipped).await.unwrap();
+    let mut ctx = GuiGame::load_from_files(two_player, player_color, flipped)
+        .await
+        .unwrap();
 
     request_new_screen_size(1024.0, 1024.0);
     next_frame().await;
@@ -229,7 +233,11 @@ fn render(game: &Game, ctx: &GuiGame) {
 
         // draw square
         draw_texture_ex(
-            if is_dark_square { &ctx.dark_square_texture } else { &ctx.light_square_texture },
+            if is_dark_square {
+                &ctx.dark_square_texture
+            } else {
+                &ctx.light_square_texture
+            },
             px,
             py,
             WHITE,
@@ -247,7 +255,7 @@ fn render(game: &Game, ctx: &GuiGame) {
             if !held && !animated {
                 draw_texture_ex(
                     ctx.get_texture(piece),
-                    px, 
+                    px,
                     py,
                     WHITE,
                     DrawTextureParams {
@@ -332,11 +340,11 @@ fn render(game: &Game, ctx: &GuiGame) {
     }
 }
 
-fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
+fn handle_input(game: &mut Game, ctx: &mut GuiGame) {
     let (px, py) = mouse_position();
 
-    let x = tctx.get_x(px);
-    let y = tctx.get_y(py);
+    let x = ctx.get_x(px);
+    let y = ctx.get_y(py);
 
     if x > 7 || y > 7 || x < 0 || y < 0 {
         return;
@@ -344,54 +352,55 @@ fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
 
     // if clicked, a square is selected, and the move (selected->click location) is legal
     if is_mouse_button_pressed(MouseButton::Left)
-        && let Some(selected) = tctx.selected_square
+        && let Some(selected) = ctx.selected_square
         && game
             .is_legal_move(selected, (x, y), Some(Promotion::Queen))
             .is_ok()
     {
-        make_move(game, tctx, selected, (x, y), false);
+        make_move(game, ctx, selected, (x, y), false);
     }
 
     // if the mouse button is held and no piece is held, hold a piece
     if is_mouse_button_down(MouseButton::Left) {
-        if !tctx.held
-            && tctx
+        if !ctx.held
+            && ctx
                 .animations
                 .iter()
                 .all(|a| a.prevent_drawing() != (x, y))
         {
-            tctx.held = true;
-            tctx.selected_square = Some((x, y));
+            ctx.held = true;
+            ctx.selected_square = Some((x, y));
         }
     }
     // if a piece is dragged, play the move
     else if is_mouse_button_released(MouseButton::Left) {
-        if let Some(selected) = tctx.selected_square
-            && tctx.held
+        if let Some(selected) = ctx.selected_square
+            && ctx.held
             && game
                 .is_legal_move(selected, (x, y), Some(Promotion::Queen))
                 .is_ok()
         {
-            make_move(game, tctx, selected, (x, y), true);
+            make_move(game, ctx, selected, (x, y), true);
         }
 
-        tctx.held = false;
+        ctx.held = false;
     }
 }
 
 // Transfers to promotion mode in case of promotion, do not use in promotion
-fn make_move(game: &mut Game, tctx: &mut GuiGame, from: Pos, to: Pos, skip_primary: bool) {
+fn make_move(game: &mut Game, ctx: &mut GuiGame, from: Pos, to: Pos, skip_primary: bool) {
     // get the effects
     let effects = game.get_move_effects(from, to, None);
     let result = game.move_checked(from, to, None);
 
     // do the move, changing to promotion state if necessary
     if result == MoveResult::MissingPromotion {
-        tctx.promotion = Some((from, to, skip_primary));
+        ctx.promotion = Some((from, to, skip_primary));
     } else {
+        play_sounds(ctx, effects.as_ref(), result);
         add_animations(
-            &mut tctx.animations,
-            effects,
+            &mut ctx.animations,
+            effects.as_ref(),
             result,
             game.board.find_king(game.turn),
             skip_primary,
@@ -414,7 +423,7 @@ fn handle_promotion(
     let color = game.turn;
     let square_size = ctx.size / 8.;
     let (dx, dy) = to;
-    
+
     ctx.held = false;
 
     draw_rectangle_ex(
@@ -467,9 +476,10 @@ fn handle_promotion(
             let effects = game.get_move_effects(from, to, promotion);
             let result = game.move_checked(from, to, promotion);
 
+            play_sounds(ctx, effects.as_ref(), result);
             add_animations(
                 &mut ctx.animations,
-                effects,
+                effects.as_ref(),
                 result,
                 game.board.find_king(game.turn),
                 skip_primary,
@@ -480,10 +490,39 @@ fn handle_promotion(
     }
 }
 
+fn play_sounds(ctx: &GuiGame, effects: Option<&MoveEffects>, result: MoveResult) {
+    // check has the highest priority
+    if let Some(check) = ctx.sounds.get(&ChessSound::Check)
+        && matches!(result, MoveResult::Check | MoveResult::Checkmate)
+    {
+        play_sound_once(check);
+        return;
+    }
+
+    // castle = capture > move
+    if let Some(effects) = effects {
+        if let Some(capture) = ctx.sounds.get(&ChessSound::Capture)
+            && effects.lost_piece.is_some()
+        {
+            play_sound_once(capture);
+            return;
+        } else if let Some(castle) = ctx.sounds.get(&ChessSound::Castle)
+            && effects.piece_moves.1.is_some()
+        {
+            play_sound_once(castle);
+            return;
+        }
+    }
+
+    if let Some(default) = ctx.sounds.get(&ChessSound::Move) {
+        play_sound_once(default);
+    }
+}
+
 // decide which animations to add to the queue
 fn add_animations(
     vec: &mut Vec<Box<dyn Animation>>,
-    effects: Option<MoveEffects>,
+    effects: Option<&MoveEffects>,
     result: MoveResult,
     king_pos: Option<Pos>,
     skip_primary: bool,
