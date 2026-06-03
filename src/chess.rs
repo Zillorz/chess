@@ -1,6 +1,4 @@
 use bitflags::bitflags;
-use macroquad::prelude::info;
-use std::collections::HashSet;
 use std::ops::{Index, IndexMut, Not};
 
 bitflags! {
@@ -48,11 +46,11 @@ impl Piece {
     // assuming in bounds
     // Note: does not check pawn movement, as pawn movement is far too complex
     // Note: does not check castling, as castling is also far too complex
-    fn can_move(&self, rx: isize, ry: isize) -> bool {
+    fn can_move(self, rx: isize, ry: isize) -> bool {
         let (rx, ry) = (rx.abs(), ry.abs()); // pieces can move forward or backward!
 
         // piece can't do this!
-        if (rx == 0 && ry == 0) {
+        if rx == 0 && ry == 0 {
             return false;
         }
 
@@ -68,7 +66,7 @@ impl Piece {
         }
     }
 
-    pub(crate) fn color(&self) -> Color {
+    pub(crate) fn color(self) -> Color {
         match self {
             Piece::WPawn
             | Piece::WKnight
@@ -194,6 +192,7 @@ impl Default for Board {
 }
 
 impl Board {
+    #[allow(unused)]
     fn from_fen_board(fen_board: &str) -> Option<Board> {
         let rows = fen_board.split('/').rev().flat_map(|x| x.chars());
 
@@ -213,6 +212,7 @@ impl Board {
         Some(Board(b))
     }
 
+    #[allow(unused)]
     fn into_fen_board(self) -> String {
         let mut str = String::new();
 
@@ -237,7 +237,7 @@ impl Board {
             }
 
             if y != 0 {
-                str.push('/')
+                str.push('/');
             }
         }
 
@@ -263,13 +263,13 @@ impl Index<(isize, isize)> for Board {
     type Output = Option<Piece>;
 
     fn index(&self, (x, y): (isize, isize)) -> &Self::Output {
-        &self.0[(x + y * 8) as usize]
+        &self.0[(x + y * 8).cast_unsigned()]
     }
 }
 
 impl IndexMut<(isize, isize)> for Board {
     fn index_mut(&mut self, (x, y): (isize, isize)) -> &mut Self::Output {
-        &mut self.0[(x + y * 8) as usize]
+        &mut self.0[(x + y * 8).cast_unsigned()]
     }
 }
 
@@ -425,12 +425,6 @@ impl Default for Game {
     }
 }
 
-pub(crate) const PROMOTIONS: [Promotion; 4] = [
-    Promotion::Bishop,
-    Promotion::Rook,
-    Promotion::Knight,
-    Promotion::Queen,
-];
 #[repr(u8)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Promotion {
@@ -466,8 +460,16 @@ impl MoveResult {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum Legality {
+    Legal,
+    Illegal,
+    IllegalBecauseOfCheck,
+}
+
 impl Game {
     // creates fen representation of game
+    #[allow(unused)]
     pub(crate) fn as_fen(&self) -> String {
         let mut fen = self.board.into_fen_board();
 
@@ -483,28 +485,31 @@ impl Game {
 
         fen.push(' ');
         if self.castle & CastleFlags::WK == CastleFlags::WK {
-            fen.push('K')
+            fen.push('K');
         }
         if self.castle & CastleFlags::WQ == CastleFlags::WQ {
-            fen.push('Q')
+            fen.push('Q');
         }
         if self.castle & CastleFlags::BK == CastleFlags::BK {
-            fen.push('k')
+            fen.push('k');
         }
         if self.castle & CastleFlags::BQ == CastleFlags::BQ {
-            fen.push('q')
+            fen.push('q');
         }
 
         if self.castle == CastleFlags::NONE {
-            fen.push('-')
+            fen.push('-');
         }
 
         fen.push(' ');
         if let Some(en_passant) = self.en_passant {
             let (x, y) = en_passant.location();
 
-            fen.push(char::from(x as u8 + 'a' as u8));
-            fen.push(char::from(y as u8 + '1' as u8));
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            {
+                fen.push(char::from(x as u8 + b'a'));
+                fen.push(char::from(y as u8 + b'1'));
+            }
         } else {
             fen.push('-');
         }
@@ -517,6 +522,7 @@ impl Game {
         fen
     }
 
+    #[allow(unused)]
     pub(crate) fn from_fen(fen: impl AsRef<str>) -> Option<Self> {
         let mut parts = fen.as_ref().split(' ');
 
@@ -553,7 +559,7 @@ impl Game {
             let mut iter = en_passant.chars();
 
             let x = iter.next()? as isize - 'a' as isize;
-            let y = (iter.next()? as isize - '1' as isize);
+            let y = iter.next()? as isize - '1' as isize;
 
             EnPassant::from_skipped_location((x, y))
         };
@@ -574,16 +580,13 @@ impl Game {
 
     // validates a moves legality (does not factor in checks/pins)
     // NOTE: checkless validation (except castling, which validates no checks in path)
+    #[allow(clippy::too_many_lines)] // this function is the vast vast vast majority of the checking
     fn is_legal_checkless(&self, from: Pos, to: Pos, promotion: Option<Promotion>) -> MoveResult {
         // move must be in the board
         let (ox, oy) = from;
         let (nx, ny) = to;
 
-        if ox > 7 || oy > 7 || ox < 0 || oy < 0 {
-            return MoveResult::Impossible;
-        }
-
-        if nx > 7 || ny > 7 || nx < 0 || ny < 0 {
+        if ox > 7 || oy > 7 || ox < 0 || oy < 0 || nx > 7 || ny > 7 || nx < 0 || ny < 0 {
             return MoveResult::Impossible;
         }
 
@@ -610,7 +613,7 @@ impl Game {
         let ry = ny - oy;
 
         // pawns are funky
-        if piece == Piece::BPawn || piece == Piece::WPawn {
+        if matches!(piece, Piece::BPawn | Piece::WPawn) {
             let (arx, ary) = (rx.abs(), ry.abs());
 
             let occupied = self.board[(nx, ny)].is_some();
@@ -651,16 +654,15 @@ impl Game {
             }
 
             // Determine which side we are castling
-            let mut game = self.clone();
+            let mut game = *self;
 
             match (piece, from, to) {
                 // black king-side
                 (Piece::BKing, (4, 7), (6, 7)) => {
-                    if self.castle & CastleFlags::BK == CastleFlags::NONE {
-                        return MoveResult::Illegal;
-                    }
-
-                    if self.board[(5, 7)].is_some() || self.board[(6, 7)].is_some() {
+                    if self.castle & CastleFlags::BK == CastleFlags::NONE
+                        || self.board[(5, 7)].is_some()
+                        || self.board[(6, 7)].is_some()
+                    {
                         return MoveResult::Illegal;
                     }
 
@@ -671,10 +673,8 @@ impl Game {
                 }
                 // black queen-side
                 (Piece::BKing, (4, 7), (2, 7)) => {
-                    if self.castle & CastleFlags::BQ == CastleFlags::NONE {
-                        return MoveResult::Illegal;
-                    }
-                    if self.board[(3, 7)].is_some()
+                    if self.castle & CastleFlags::BQ == CastleFlags::NONE
+                        || self.board[(3, 7)].is_some()
                         || self.board[(2, 7)].is_some()
                         || self.board[(1, 7)].is_some()
                     {
@@ -688,10 +688,10 @@ impl Game {
                 }
                 // white king-side
                 (Piece::WKing, (4, 0), (6, 0)) => {
-                    if self.castle & CastleFlags::WK == CastleFlags::NONE {
-                        return MoveResult::Illegal;
-                    }
-                    if self.board[(5, 0)].is_some() || self.board[(6, 0)].is_some() {
+                    if self.castle & CastleFlags::WK == CastleFlags::NONE
+                        || self.board[(5, 0)].is_some()
+                        || self.board[(6, 0)].is_some()
+                    {
                         return MoveResult::Illegal;
                     }
 
@@ -702,11 +702,8 @@ impl Game {
                 }
                 // white queen-side
                 (Piece::WKing, (4, 0), (2, 0)) => {
-                    if self.castle & CastleFlags::WQ == CastleFlags::NONE {
-                        return MoveResult::Illegal;
-                    }
-
-                    if self.board[(1, 0)].is_some()
+                    if self.castle & CastleFlags::WQ == CastleFlags::NONE
+                        || self.board[(1, 0)].is_some()
                         || self.board[(2, 0)].is_some()
                         || self.board[(3, 0)].is_some()
                     {
@@ -749,11 +746,6 @@ impl Game {
 
             // continue tracing until we reach location
             while tx != nx || ty != ny {
-                // shouldn't be necessary, but why not :shrug:
-                // if tx > 7 || tx < 0 || ty > 7 || ty < 0 {
-                //     return MoveResult::Illegal;
-                // }
-
                 // cannot move through piece
                 if self.board[(tx, ty)].is_some() {
                     return MoveResult::Illegal;
@@ -772,9 +764,9 @@ impl Game {
         // as you don't actually take (the king) in a check, just threaten to do so, so pins don't matter.
         // both players can't be in check, so we assume the opponent of the 'player' is not in check
 
-        let mut kpos = self.board.find_king(player).unwrap();
+        let kpos = self.board.find_king(player).unwrap();
 
-        let mut game = self.clone();
+        let mut game = *self;
         game.turn = !player;
 
         for pos in BoardIter::default() {
@@ -857,7 +849,7 @@ impl Game {
     }
 
     pub(crate) fn is_in_checkmate(&self, player: Color) -> bool {
-        if !self.is_in_check(self.turn) {
+        if !self.is_in_check(player) {
             return false;
         }
 
@@ -866,7 +858,7 @@ impl Game {
                 continue;
             };
 
-            if piece.color() == self.turn {
+            if piece.color() == player {
                 // just play this move!
                 if !self.all_legal_moves((x, y)).is_empty() {
                     return false;
@@ -898,6 +890,26 @@ impl Game {
         true
     }
 
+    fn is_legal(&self, from: Pos, to: Pos) -> Legality {
+        let legal = self.is_legal_checkless(from, to, Some(Promotion::Queen)) == MoveResult::Valid;
+
+        if legal {
+            let mut copy = *self;
+            copy.move_unchecked(from, to, Some(Promotion::Queen));
+
+            // cannot play a move which puts self in check (or a move which keeps self in check)
+            if copy.is_in_check(self.turn) {
+                return Legality::IllegalBecauseOfCheck;
+            }
+        }
+
+        if legal {
+            Legality::Legal
+        } else {
+            Legality::Illegal
+        }
+    }
+
     pub(crate) fn all_legal_moves(&self, start: Pos) -> Vec<Pos> {
         let Some(piece) = self.board[start] else {
             return Vec::new();
@@ -907,41 +919,12 @@ impl Game {
             return Vec::new();
         }
 
-        #[derive(PartialEq, Eq)]
-        enum Legality {
-            Legal,
-            Illegal,
-            IllegalBecauseOfCheck,
-        }
-
-        // returns true if a move is legal
-        let legal_move = |to: Pos| -> Legality {
-            let legal =
-                self.is_legal_checkless(start, to, Some(Promotion::Queen)) == MoveResult::Valid;
-
-            if legal {
-                let mut copy = self.clone();
-                copy.move_unchecked(start, to, Some(Promotion::Queen));
-
-                // cannot play a move which puts self in check (or a move which keeps self in check)
-                if (copy.is_in_check(self.turn)) {
-                    return Legality::IllegalBecauseOfCheck;
-                }
-            }
-
-            if legal {
-                Legality::Legal
-            } else {
-                Legality::Illegal
-            }
-        };
-
         let mut list = Vec::new();
 
         let mut test_move = |rx: isize, ry: isize| -> Legality {
             let (x, y) = (rx + start.0, ry + start.1);
 
-            let legal = legal_move((x, y));
+            let legal = self.is_legal(start, (rx, ry));
             if legal == Legality::Legal {
                 list.push((x, y));
             }
@@ -1046,7 +1029,7 @@ impl Game {
         }
 
         // Any move at this point is valid (omitting check)
-        let mut n_board = self.clone();
+        let mut n_board = *self;
         n_board.move_unchecked(from, to, promotion);
 
         // cannot play a move which puts self in check (or a move which keeps self in check)
@@ -1063,24 +1046,24 @@ impl Game {
             return MoveResult::Draw;
         }
 
-        // 2) Stalemate, use move_gen on every piece, generating all legal moves,
-        // if no legal moves are possible and not in check, stalemate
-        if !n_board.is_in_check(!self.turn) {
-            if n_board.is_stalemate() {
-                return MoveResult::Stalemate;
-            }
-
-            MoveResult::Valid
-        } else {
-            // 3) Checkmate
+        if n_board.is_in_check(!self.turn) {
+            // 2) Checkmate
             // Check if game is over for opponent
             if n_board.is_in_checkmate(!self.turn) {
                 return MoveResult::Checkmate;
             }
 
-            // 4) Check
+            // 3) Check
             // Opponent is in check
             MoveResult::Check
+        } else {
+            // 4) Stalemate, use move_gen on every piece, generating all legal moves,
+            // if no legal moves are possible and not in check, stalemate
+            if n_board.is_stalemate() {
+                return MoveResult::Stalemate;
+            }
+
+            MoveResult::Valid
         }
     }
 

@@ -1,12 +1,14 @@
+#![allow(unused)]
 use std::io::{BufRead, BufReader, Write};
 use std::num::{NonZeroU8, NonZeroU64};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
-// use std::thread::JoinHandle;
 use crate::{Game, chess::Promotion};
 use std::time::{Duration, Instant};
+
+use std::fmt::Write as _;
 
 pub struct ThreadedUci {
     sender: Sender<Message>,
@@ -60,8 +62,8 @@ impl ThreadedUci {
                         let time = Instant::now();
                         let ret = uci.recommend_move(&game, limits);
 
-                        if min_time > time.elapsed() {
-                            std::thread::sleep(min_time - time.elapsed());
+                        if let Some(duration) = min_time.checked_sub(time.elapsed()) {
+                            std::thread::sleep(duration);
                         }
 
                         s2.send(ResultMessage::Result(ret)).unwrap();
@@ -96,14 +98,14 @@ pub struct Uci {
     process: Child,
 }
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 impl Uci {
     #[cfg(windows)]
     pub(crate) fn new() -> Self {
         let mut child = Command::new("cmd")
             .args(["/C", "uci.bat"])
-            .creation_flags(0x08000000)
+            .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::piped())
             .stdin(Stdio::piped())
             .spawn()
@@ -134,7 +136,7 @@ impl Uci {
         let stdin = self.process.stdin.as_mut().unwrap();
         let fen = game.as_fen();
 
-        writeln!(stdin, "position fen {}", fen).unwrap();
+        writeln!(stdin, "position fen {fen}").unwrap();
         writeln!(stdin, "go {}", limits.into_limit_string()).unwrap();
 
         let mut stdout = BufReader::new(self.process.stdout.as_mut().unwrap());
@@ -162,7 +164,7 @@ impl Uci {
                         'r' => Some(Promotion::Rook),
                         'b' => Some(Promotion::Bishop),
                         c => {
-                            eprintln!("Unknown promotion letter, '{}'", c);
+                            eprintln!("Unknown promotion letter, '{c}'");
                             None
                         }
                     }
@@ -226,27 +228,27 @@ impl Limits {
         let mut ret = String::new();
 
         if let Some(time) = self.time {
-            ret.push_str(&format!(" movetime {}", time));
+            write!(ret, " movetime {time}");
         }
 
         if let Some(depth) = self.depth {
-            ret.push_str(&format!(" depth {}", depth));
+            write!(ret, " depth {depth}");
         }
 
         if let Some(w_time) = self.w_time {
-            ret.push_str(&format!(" wtime {}", w_time));
+            write!(ret, " wtime {w_time}");
         }
 
         if let Some(b_time) = self.b_time {
-            ret.push_str(&format!(" btime {}", b_time));
+            write!(ret, " btime {b_time}");
         }
 
         if let Some(w_inc) = self.w_inc {
-            ret.push_str(&format!(" winc {}", w_inc));
+            write!(ret, " winc {w_inc}");
         }
 
         if let Some(b_inc) = self.b_inc {
-            ret.push_str(&format!(" binc {}", b_inc));
+            write!(ret, " binc {b_inc}");
         }
 
         // default limit will be depth 20

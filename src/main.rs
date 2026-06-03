@@ -1,23 +1,17 @@
-#![allow(unused)]
+#![warn(clippy::pedantic)]
 #![windows_subsystem = "windows"]
 
 mod chess;
 mod uci;
 
-use crate::uci::{Limits, ThreadedUci};
-use macroquad::audio::{Sound, load_sound, play_sound_once};
-use macroquad::{Error, color, hash};
-use std::cmp::min;
-use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use macroquad::audio::{Sound, load_sound};
+use macroquad::{Error, hash};
+use std::collections::HashMap;
 
-use crate::chess::{
-    Board, BoardIter, Game, MoveEffects, MoveResult, PROMOTIONS, Piece, Pos, Promotion,
-};
+use crate::chess::{BoardIter, Game, MoveEffects, MoveResult, Piece, Pos, Promotion};
 use macroquad::prelude::*;
 use macroquad::ui::{Skin, root_ui};
 
-const TL_GRAY: Color = Color::new(0.20, 0.20, 0.20, 0.2);
 const TD_GRAY: Color = Color::new(0.10, 0.10, 0.10, 0.4);
 const TD_RED: Color = Color::new(0.92, 0.20, 0.20, 0.5);
 
@@ -84,6 +78,7 @@ enum ChessSound {
     Check,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct GuiGame {
     piece_textures: HashMap<Piece, Texture2D>,
     sounds: HashMap<ChessSound, Sound>,
@@ -96,6 +91,9 @@ struct GuiGame {
     size: f32,
     flipped: bool,
 
+    two_player: bool,
+    player_color: chess::Color,
+
     complete: bool,
 
     selected_square: Option<Pos>,
@@ -106,7 +104,7 @@ struct GuiGame {
 }
 
 impl GuiGame {
-    async fn load_from_files() -> Result<Self, Error> {
+    async fn load_from_files(two_player: bool, player_color: chess::Color, flipped: bool) -> Result<Self, Error> {
         let piece_textures = HashMap::from([
             (Piece::WPawn, load_texture("assets/wP.png").await?),
             (Piece::WKnight, load_texture("assets/wN.png").await?),
@@ -138,15 +136,19 @@ impl GuiGame {
             light_square_texture,
             dark_square_texture,
 
+            animations: Vec::new(),
+
             top_left: Vec2::splat(0.),
             size: 1024.,
-            flipped: false,
+            flipped,
+
+            two_player,
+            player_color,
+
             complete: false,
 
             selected_square: None,
             held: false,
-
-            animations: Vec::new(),
 
             promotion: None,
         })
@@ -156,23 +158,29 @@ impl GuiGame {
         self.piece_textures.get(&piece).unwrap()
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn get_px(&self, x: isize) -> f32 {
         x as f32 * (self.size / 8.) + self.top_left.x
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn get_py(&self, y: isize) -> f32 {
         (if self.flipped {
             y as f32
         } else {
-            (7. - y as f32)
+            7. - y as f32
         }) * (self.size / 8.)
             + self.top_left.y
     }
 
+
+    #[allow(clippy::cast_possible_truncation)]
     fn get_x(&self, px: f32) -> isize {
         ((px - self.top_left.x) / (self.size / 8.)) as isize
     }
 
+
+    #[allow(clippy::cast_possible_truncation)]
     fn get_y(&self, py: f32) -> isize {
         (if self.flipped {
             (py - self.top_left.y) / (self.size / 8.)
@@ -184,7 +192,7 @@ impl GuiGame {
 
 async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) {
     let mut game = Game::default();
-    let mut ctx = GuiGame::load_from_files().await.unwrap();
+    let mut ctx = GuiGame::load_from_files(two_player, player_color, flipped).await.unwrap();
 
     request_new_screen_size(1024.0, 1024.0);
     next_frame().await;
@@ -209,81 +217,58 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
     }
 }
 
-fn render(game: &Game, tctx: &GuiGame) {
+fn render(game: &Game, ctx: &GuiGame) {
     let board = game.board;
-    let square_size = tctx.size / 8.0;
-
-    let map_x = |x: isize| tctx.get_px(x);
-    let map_y = |y: isize| tctx.get_py(y);
+    let square_size = ctx.size / 8.0;
 
     for (x, y) in BoardIter::default() {
         let is_dark_square = (x + y) % 2 == 0;
 
-        if is_dark_square {
-            draw_texture_ex(
-                &tctx.dark_square_texture,
-                map_x(x),
-                map_y(y),
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(Vec2::splat(square_size)),
-                    ..Default::default()
-                },
-            );
-        } else {
-            draw_texture_ex(
-                &tctx.light_square_texture,
-                map_x(x),
-                map_y(y),
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(Vec2::splat(square_size)),
-                    ..Default::default()
-                },
-            );
-        }
+        let px = ctx.get_px(x);
+        let py = ctx.get_py(y);
+
+        // draw square
+        draw_texture_ex(
+            if is_dark_square { &ctx.dark_square_texture } else { &ctx.light_square_texture },
+            px,
+            py,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(Vec2::splat(square_size)),
+                ..Default::default()
+            },
+        );
 
         if let Some(piece) = board[(x, y)] {
-            // Don't render held piece
-            if let Some(selected) = tctx.selected_square
-                && selected == (x, y)
-                && tctx.held
-            {
-                continue;
-            }
+            // Don't render held pieces
+            let held = ctx.selected_square.is_some_and(|s| s == (x, y)) && ctx.held;
+            let animated = ctx.animations.iter().any(|a| a.prevent_drawing() == (x, y));
 
-            // Don't render pieces currently animating
-            if tctx
-                .animations
-                .iter()
-                .any(|a| a.prevent_drawing() == (x, y))
-            {
-                continue;
+            if !held && !animated {
+                draw_texture_ex(
+                    ctx.get_texture(piece),
+                    px, 
+                    py,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(Vec2::splat(square_size)),
+                        ..Default::default()
+                    },
+                );
             }
-
-            draw_texture_ex(
-                tctx.get_texture(piece),
-                map_x(x),
-                map_y(y),
-                WHITE,
-                DrawTextureParams {
-                    dest_size: Some(Vec2::splat(square_size)),
-                    ..Default::default()
-                },
-            );
         }
     }
 
     // if selected, show legal moves
-    if let Some(square) = tctx.selected_square {
+    if let Some(square) = ctx.selected_square {
         let moves = game.all_legal_moves(square);
 
-        for cmove in moves {
-            let occupied = board[cmove].is_some();
+        for (dx, dy) in moves {
+            let occupied = board[(dx, dy)].is_some();
 
             draw_poly(
-                map_x(cmove.0) + square_size / 2.,
-                map_y(cmove.1) + square_size / 2.,
+                ctx.get_px(dx) + square_size / 2.,
+                ctx.get_py(dy) + square_size / 2.,
                 255,
                 square_size / 7.,
                 0.,
@@ -293,14 +278,14 @@ fn render(game: &Game, tctx: &GuiGame) {
     }
 
     // draw held piece at mouse
-    if let Some(selected) = tctx.selected_square
-        && tctx.held
+    if let Some(selected) = ctx.selected_square
         && let Some(piece) = board[selected]
+        && ctx.held
     {
         let (px, py) = mouse_position();
 
         draw_texture_ex(
-            tctx.get_texture(piece),
+            ctx.get_texture(piece),
             px - square_size / 2.,
             py - square_size / 2.,
             WHITE,
@@ -312,12 +297,12 @@ fn render(game: &Game, tctx: &GuiGame) {
     }
 
     // render checks, unless animation is present
-    if game.is_in_check(game.turn) && tctx.animations.iter().all(|a| !a.prevent_king_decoration()) {
+    if game.is_in_check(game.turn) && ctx.animations.iter().all(|a| !a.prevent_king_decoration()) {
         let (x, y) = board.find_king(game.turn).unwrap();
 
         draw_poly(
-            map_x(x) + square_size / 2.,
-            map_y(y) + square_size / 2.,
+            ctx.get_px(x) + square_size / 2.,
+            ctx.get_py(y) + square_size / 2.,
             255,
             square_size / 3.,
             0.,
@@ -327,13 +312,13 @@ fn render(game: &Game, tctx: &GuiGame) {
 
     // render draw, unless animation is present
     if (game.is_draw() | game.is_stalemate())
-        && tctx.animations.iter().all(|a| !a.prevent_king_decoration())
+        && ctx.animations.iter().all(|a| !a.prevent_king_decoration())
     {
         let (x, y) = board.find_king(game.turn).unwrap();
 
         draw_poly(
-            map_x(x) + square_size / 2.,
-            map_y(y) + square_size / 2.,
+            ctx.get_px(x) + square_size / 2.,
+            ctx.get_py(y) + square_size / 2.,
             255,
             square_size / 3.,
             0.,
@@ -342,14 +327,12 @@ fn render(game: &Game, tctx: &GuiGame) {
     }
 
     // draw the animations
-    for animation in &tctx.animations {
-        animation.draw(tctx);
+    for animation in &ctx.animations {
+        animation.draw(ctx);
     }
 }
 
 fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
-    let square_size = tctx.size / 8.0;
-
     let (px, py) = mouse_position();
 
     let x = tctx.get_x(px);
@@ -361,27 +344,12 @@ fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
 
     // if clicked, a square is selected, and the move (selected->click location) is legal
     if is_mouse_button_pressed(MouseButton::Left)
-        && let Some(square) = tctx.selected_square
+        && let Some(selected) = tctx.selected_square
         && game
-            .is_legal_move(square, (x, y), Some(Promotion::Queen))
+            .is_legal_move(selected, (x, y), Some(Promotion::Queen))
             .is_ok()
     {
-        // get the effects
-        let effects = game.get_move_effects(square, (x, y), None);
-        let mut result = game.move_checked(square, (x, y), None);
-
-        // do the move, changing to promotion state if necessary
-        if result == MoveResult::MissingPromotion {
-            tctx.promotion = Some((square, (x, y), false));
-        } else {
-            add_animations(
-                &mut tctx.animations,
-                effects,
-                result,
-                game.board.find_king(game.turn),
-                false,
-            );
-        }
+        make_move(game, tctx, selected, (x, y), false);
     }
 
     // if the mouse button is held and no piece is held, hold a piece
@@ -404,27 +372,40 @@ fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
                 .is_legal_move(selected, (x, y), Some(Promotion::Queen))
                 .is_ok()
         {
-            let effects = game.get_move_effects(selected, (x, y), None);
-            let result = game.move_checked(selected, (x, y), None);
-
-            if result == MoveResult::MissingPromotion {
-                tctx.promotion = Some((selected, (x, y), true));
-            } else {
-                add_animations(
-                    &mut tctx.animations,
-                    effects,
-                    result,
-                    game.board.find_king(game.turn),
-                    true,
-                );
-            }
+            make_move(game, tctx, selected, (x, y), true);
         }
 
         tctx.held = false;
     }
 }
 
-// promotion state
+// Transfers to promotion mode in case of promotion, do not use in promotion
+fn make_move(game: &mut Game, tctx: &mut GuiGame, from: Pos, to: Pos, skip_primary: bool) {
+    // get the effects
+    let effects = game.get_move_effects(from, to, None);
+    let result = game.move_checked(from, to, None);
+
+    // do the move, changing to promotion state if necessary
+    if result == MoveResult::MissingPromotion {
+        tctx.promotion = Some((from, to, skip_primary));
+    } else {
+        add_animations(
+            &mut tctx.animations,
+            effects,
+            result,
+            game.board.find_king(game.turn),
+            skip_primary,
+        );
+    }
+}
+
+const PROMOTIONS: [Promotion; 4] = [
+    Promotion::Queen,
+    Promotion::Knight,
+    Promotion::Rook,
+    Promotion::Bishop,
+];
+
 fn handle_promotion(
     game: &mut Game,
     ctx: &mut GuiGame,
@@ -432,12 +413,8 @@ fn handle_promotion(
 ) {
     let color = game.turn;
     let square_size = ctx.size / 8.;
-    const PROMOTIONS: [Promotion; 4] = [
-        Promotion::Queen,
-        Promotion::Knight,
-        Promotion::Rook,
-        Promotion::Bishop,
-    ];
+    let (dx, dy) = to;
+    
     ctx.held = false;
 
     draw_rectangle_ex(
@@ -452,8 +429,8 @@ fn handle_promotion(
     );
 
     for i in 0..4 {
-        let px = ctx.get_px(to.0);
-        let y = if to.1 == 7 { to.1 - i } else { to.1 + i };
+        let px = ctx.get_px(dx);
+        let y = if dy == 7 { 7 - i } else { i };
         let py = ctx.get_py(y);
 
         draw_poly(
@@ -466,7 +443,7 @@ fn handle_promotion(
         );
 
         draw_texture_ex(
-            ctx.get_texture(Piece::from_promotion(PROMOTIONS[i as usize], color)),
+            ctx.get_texture(Piece::from_promotion(PROMOTIONS[i.cast_unsigned()], color)),
             px,
             py,
             WHITE,
@@ -482,13 +459,13 @@ fn handle_promotion(
     let y = ctx.get_y(py);
 
     if is_mouse_button_pressed(MouseButton::Left) && x == to.0 {
-        let idx = if to.1 == 7 { 7 - y } else { y };
+        let idx = if dy == 7 { 7 - y } else { y };
 
         if (0..4).contains(&idx) {
-            let promotion = Some(PROMOTIONS[idx as usize]);
+            let promotion = Some(PROMOTIONS[idx.cast_unsigned()]);
 
             let effects = game.get_move_effects(from, to, promotion);
-            let mut result = game.move_checked(from, to, promotion);
+            let result = game.move_checked(from, to, promotion);
 
             add_animations(
                 &mut ctx.animations,
