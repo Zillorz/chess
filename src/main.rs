@@ -33,7 +33,7 @@ async fn main() {
         .color_hovered(BROWN)
         .build();
 
-    let checkbox_style = root_ui().style_builder()
+    let checkbox_style = root_ui()
         .style_builder()
         .font_size(40)
         .color(RED)
@@ -101,7 +101,8 @@ struct GuiGame {
     selected_square: Option<Pos>,
     held: bool,
 
-    promotion: Option<(Pos, Pos, bool)>
+    // from, to, skip_primary_animation
+    promotion: Option<(Pos, Pos, bool)>,
 }
 
 impl GuiGame {
@@ -147,7 +148,7 @@ impl GuiGame {
 
             animations: Vec::new(),
 
-            promotion: None
+            promotion: None,
         })
     }
 
@@ -188,32 +189,20 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
     request_new_screen_size(1024.0, 1024.0);
     next_frame().await;
 
-    // let mut selected_piece = None;
-
-    let sf = ThreadedUci::new_delay(Duration::from_millis(500));
-    let limits = Limits::default().depth(18).time(150);
-
-    if game.turn == !player_color && !two_player {
-        sf.recommend_move(game, limits);
-    }
-
-    // let mut winner = None;
-    let mut draw = false;
-
-    // let mut animations: Vec<Animation> = Vec::new();
-
     loop {
         let size = f32::min(screen_height(), screen_width());
         ctx.size = size;
 
-        render(&game, &ctx);
         ctx.animations
             .retain_mut(|animation| !animation.tick(get_frame_time()));
 
-        if let Some(promotion) = ctx.promotion {
-            handle_promotion(&mut game, &mut ctx, promotion);
-        } else {
-            handle_input(&mut game, &mut ctx);
+        render(&game, &ctx);
+        if !ctx.complete {
+            if let Some(promotion) = ctx.promotion {
+                handle_promotion(&mut game, &mut ctx, promotion);
+            } else {
+                handle_input(&mut game, &mut ctx);
+            }
         }
 
         next_frame().await;
@@ -255,6 +244,7 @@ fn render(game: &Game, tctx: &GuiGame) {
         }
 
         if let Some(piece) = board[(x, y)] {
+            // Don't render held piece
             if let Some(selected) = tctx.selected_square
                 && selected == (x, y)
                 && tctx.held
@@ -262,6 +252,7 @@ fn render(game: &Game, tctx: &GuiGame) {
                 continue;
             }
 
+            // Don't render pieces currently animating
             if tctx
                 .animations
                 .iter()
@@ -283,6 +274,7 @@ fn render(game: &Game, tctx: &GuiGame) {
         }
     }
 
+    // if selected, show legal moves
     if let Some(square) = tctx.selected_square {
         let moves = game.all_legal_moves(square);
 
@@ -295,15 +287,12 @@ fn render(game: &Game, tctx: &GuiGame) {
                 255,
                 square_size / 7.,
                 0.,
-                if occupied {
-                    Color::from_rgba(150, 0, 0, 120)
-                } else {
-                    Color::from_rgba(70, 70, 70, 120)
-                },
+                if occupied { TD_RED } else { TD_GRAY },
             );
         }
     }
 
+    // draw held piece at mouse
     if let Some(selected) = tctx.selected_square
         && tctx.held
         && let Some(piece) = board[selected]
@@ -322,7 +311,7 @@ fn render(game: &Game, tctx: &GuiGame) {
         );
     }
 
-    // render checks
+    // render checks, unless animation is present
     if game.is_in_check(game.turn) && tctx.animations.iter().all(|a| !a.prevent_king_decoration()) {
         let (x, y) = board.find_king(game.turn).unwrap();
 
@@ -336,6 +325,7 @@ fn render(game: &Game, tctx: &GuiGame) {
         );
     }
 
+    // render draw, unless animation is present
     if (game.is_draw() | game.is_stalemate())
         && tctx.animations.iter().all(|a| !a.prevent_king_decoration())
     {
@@ -351,6 +341,7 @@ fn render(game: &Game, tctx: &GuiGame) {
         );
     }
 
+    // draw the animations
     for animation in &tctx.animations {
         animation.draw(tctx);
     }
@@ -359,35 +350,30 @@ fn render(game: &Game, tctx: &GuiGame) {
 fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
     let square_size = tctx.size / 8.0;
 
-    // let map_x = |x: isize| x as f32 * square_size + tctx.top_left.x;
-    // let map_y = |y: isize| if tctx.flipped { y as f32 } else { (7. - y as f32) } * square_size + tctx.top_left.y;
-
-    let map_px = |x: f32| tctx.get_x(x);
-    let map_py = |y: f32| tctx.get_y(y);
-
     let (px, py) = mouse_position();
 
-    let x = map_px(px);
-    let y = map_py(py);
+    let x = tctx.get_x(px);
+    let y = tctx.get_y(py);
 
     if x > 7 || y > 7 || x < 0 || y < 0 {
         return;
     }
 
+    // if clicked, a square is selected, and the move (selected->click location) is legal
     if is_mouse_button_pressed(MouseButton::Left)
         && let Some(square) = tctx.selected_square
-        && game.is_legal_move(square, (x, y), Some(Promotion::Queen)).is_ok()
+        && game
+            .is_legal_move(square, (x, y), Some(Promotion::Queen))
+            .is_ok()
     {
-        // do the move
+        // get the effects
         let effects = game.get_move_effects(square, (x, y), None);
         let mut result = game.move_checked(square, (x, y), None);
 
+        // do the move, changing to promotion state if necessary
         if result == MoveResult::MissingPromotion {
-            tctx.promotion = Some(
-                 (square, (x, y), false)
-            );
+            tctx.promotion = Some((square, (x, y), false));
         } else {
-            // play animations
             add_animations(
                 &mut tctx.animations,
                 effects,
@@ -398,6 +384,7 @@ fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
         }
     }
 
+    // if the mouse button is held and no piece is held, hold a piece
     if is_mouse_button_down(MouseButton::Left) {
         if !tctx.held
             && tctx
@@ -408,21 +395,21 @@ fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
             tctx.held = true;
             tctx.selected_square = Some((x, y));
         }
-    } else if is_mouse_button_released(MouseButton::Left) {
+    }
+    // if a piece is dragged, play the move
+    else if is_mouse_button_released(MouseButton::Left) {
         if let Some(selected) = tctx.selected_square
             && tctx.held
-            && game.is_legal_move(selected, (x, y), Some(Promotion::Queen)).is_ok()
+            && game
+                .is_legal_move(selected, (x, y), Some(Promotion::Queen))
+                .is_ok()
         {
-            // do the move
             let effects = game.get_move_effects(selected, (x, y), None);
             let result = game.move_checked(selected, (x, y), None);
 
             if result == MoveResult::MissingPromotion {
-                tctx.promotion = Some(
-                     (selected, (x, y), true)
-                );
+                tctx.promotion = Some((selected, (x, y), true));
             } else {
-                // play animations
                 add_animations(
                     &mut tctx.animations,
                     effects,
@@ -437,20 +424,31 @@ fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
     }
 }
 
-fn handle_promotion(game: &mut Game, ctx: &mut GuiGame, (from, to, skip_primary): (Pos, Pos, bool)) {
+// promotion state
+fn handle_promotion(
+    game: &mut Game,
+    ctx: &mut GuiGame,
+    (from, to, skip_primary): (Pos, Pos, bool),
+) {
     let color = game.turn;
-    const PROMOTIONS: [Promotion; 4] = [Promotion::Queen, Promotion::Knight, Promotion::Rook, Promotion::Bishop];
+    let square_size = ctx.size / 8.;
+    const PROMOTIONS: [Promotion; 4] = [
+        Promotion::Queen,
+        Promotion::Knight,
+        Promotion::Rook,
+        Promotion::Bishop,
+    ];
     ctx.held = false;
 
     draw_rectangle_ex(
-        ctx.top_left.x, 
-        ctx.top_left.y, 
-        ctx.size, 
-        ctx.size, 
+        ctx.top_left.x,
+        ctx.top_left.y,
+        ctx.size,
+        ctx.size,
         DrawRectangleParams {
             color: GRAY.with_alpha(0.2),
             ..Default::default()
-        }
+        },
     );
 
     for i in 0..4 {
@@ -459,10 +457,10 @@ fn handle_promotion(game: &mut Game, ctx: &mut GuiGame, (from, to, skip_primary)
         let py = ctx.get_py(y);
 
         draw_poly(
-            px + ctx.size / 16.,
-            py + ctx.size / 16.,
+            px + square_size / 2.,
+            py + square_size / 2.,
             255,
-            ctx.size / 16.,
+            square_size / 2.,
             0.,
             GRAY,
         );
@@ -473,7 +471,7 @@ fn handle_promotion(game: &mut Game, ctx: &mut GuiGame, (from, to, skip_primary)
             py,
             WHITE,
             DrawTextureParams {
-                dest_size: Some(Vec2::splat(ctx.size / 8.)),
+                dest_size: Some(Vec2::splat(square_size)),
                 ..Default::default()
             },
         );
@@ -484,11 +482,7 @@ fn handle_promotion(game: &mut Game, ctx: &mut GuiGame, (from, to, skip_primary)
     let y = ctx.get_y(py);
 
     if is_mouse_button_pressed(MouseButton::Left) && x == to.0 {
-        let idx = if to.1 == 7 {
-            7 - y
-        } else {
-            y
-        };
+        let idx = if to.1 == 7 { 7 - y } else { y };
 
         if (0..4).contains(&idx) {
             let promotion = Some(PROMOTIONS[idx as usize]);
@@ -509,16 +503,7 @@ fn handle_promotion(game: &mut Game, ctx: &mut GuiGame, (from, to, skip_primary)
     }
 }
 
-trait Animation {
-    fn prevent_drawing(&self) -> (isize, isize);
-    fn prevent_king_decoration(&self) -> bool {
-        false
-    }
-
-    fn tick(&mut self, ms: f32) -> bool;
-    fn draw(&self, tctx: &GuiGame);
-}
-
+// decide which animations to add to the queue
 fn add_animations(
     vec: &mut Vec<Box<dyn Animation>>,
     effects: Option<MoveEffects>,
@@ -536,7 +521,7 @@ fn add_animations(
                     pos: first.1,
                     elapsed: 0.,
                     fade_in: false,
-                    hide_piece: true
+                    hide_piece: true,
                 }));
 
                 vec.push(Box::new(PieceFade {
@@ -544,7 +529,7 @@ fn add_animations(
                     pos: first.1,
                     elapsed: 0.,
                     fade_in: true,
-                    hide_piece: true
+                    hide_piece: true,
                 }));
             } else {
                 vec.push(Box::new(PieceMoveFadeTransform {
@@ -579,27 +564,51 @@ fn add_animations(
                 pos: lost.0,
                 elapsed: 0.,
                 fade_in: false,
-                hide_piece: false
+                hide_piece: false,
             }));
         }
 
-        if let Some(pos) = king_pos && matches!(result, MoveResult::Check | MoveResult::Checkmate) {
+        if let Some(pos) = king_pos
+            && matches!(result, MoveResult::Check | MoveResult::Checkmate)
+        {
             vec.push(Box::new(DecorationAnim {
                 pos,
                 elapsed: 0.,
-                final_color: TD_RED
+                final_color: TD_RED,
             }));
         }
 
-        if let Some(pos) = king_pos && matches!(result, MoveResult::Draw | MoveResult::Stalemate) {
+        if let Some(pos) = king_pos
+            && matches!(result, MoveResult::Draw | MoveResult::Stalemate)
+        {
             vec.push(Box::new(DecorationAnim {
                 pos,
                 elapsed: 0.,
-                final_color: TD_GRAY
+                final_color: TD_GRAY,
             }));
         }
     }
 }
+
+trait Animation {
+    // stops drawing piece at pos, pass (-1, -1) to draw all pieces
+    fn prevent_drawing(&self) -> Pos;
+
+    // stops drawing king decorations (check/draw circles) if true, default: false
+    fn prevent_king_decoration(&self) -> bool {
+        false
+    }
+
+    // tick in time, update animation state
+    fn tick(&mut self, ms: f32) -> bool;
+
+    // draw animation
+    fn draw(&self, tctx: &GuiGame);
+}
+
+// easing is a helper function in ALL of these animations
+// it is a function that is between 0 and 1, representing how far along the animation
+// should be. Implemented so animations aren't all linear
 
 struct PieceMove {
     piece: Piece,
@@ -656,7 +665,7 @@ struct PieceFade {
     pos: (isize, isize),
     elapsed: f32,
     fade_in: bool,
-    hide_piece: bool
+    hide_piece: bool,
 }
 
 impl PieceFade {

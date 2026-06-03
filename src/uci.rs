@@ -1,12 +1,12 @@
 use std::io::{BufRead, BufReader, Write};
-use std::num::{NonZeroU64, NonZeroU8};
+use std::num::{NonZeroU8, NonZeroU64};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
 // use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
 use crate::{Game, chess::Promotion};
+use std::time::{Duration, Instant};
 
 pub struct ThreadedUci {
     sender: Sender<Message>,
@@ -15,11 +15,11 @@ pub struct ThreadedUci {
 }
 
 pub(crate) enum Message {
-    RecommendMove(Game, Limits)
+    RecommendMove(Game, Limits),
 }
 
 pub(crate) enum ResultMessage {
-    Result((usize, usize, Option<Promotion>, String))
+    Result((usize, usize, Option<Promotion>, String)),
 }
 
 impl ThreadedUci {
@@ -43,7 +43,7 @@ impl ThreadedUci {
         Self {
             sender: s,
             // handle: thread,
-            receiver: rx2
+            receiver: rx2,
         }
     }
 
@@ -73,12 +73,14 @@ impl ThreadedUci {
         Self {
             sender: s,
             // handle: thread,
-            receiver: rx2
+            receiver: rx2,
         }
     }
 
     pub(crate) fn recommend_move(&self, game: Game, limits: Limits) {
-        self.sender.send(Message::RecommendMove(game, limits)).unwrap();
+        self.sender
+            .send(Message::RecommendMove(game, limits))
+            .unwrap();
     }
 
     pub(crate) fn try_result(&self) -> Option<(usize, usize, Option<Promotion>, String)> {
@@ -91,7 +93,7 @@ impl ThreadedUci {
 }
 
 pub struct Uci {
-    process: Child
+    process: Child,
 }
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -104,12 +106,11 @@ impl Uci {
             .creation_flags(0x08000000)
             .stdout(Stdio::piped())
             .stdin(Stdio::piped())
-            .spawn().unwrap();
+            .spawn()
+            .unwrap();
 
         writeln!(child.stdin.as_mut().unwrap(), "uci").unwrap();
-        Uci {
-            process: child
-        }
+        Uci { process: child }
     }
 
     #[cfg(unix)]
@@ -118,15 +119,18 @@ impl Uci {
             .args(["uci.sh"])
             .stdout(Stdio::piped())
             .stdin(Stdio::piped())
-            .spawn().unwrap();
+            .spawn()
+            .unwrap();
 
         writeln!(child.stdin.as_mut().unwrap(), "uci").unwrap();
-        Uci {
-            process: child
-        }
+        Uci { process: child }
     }
 
-    pub(crate) fn recommend_move(&mut self, game: &Game, limits: Limits) -> (usize, usize, Option<Promotion>, String) {
+    pub(crate) fn recommend_move(
+        &mut self,
+        game: &Game,
+        limits: Limits,
+    ) -> (usize, usize, Option<Promotion>, String) {
         let stdin = self.process.stdin.as_mut().unwrap();
         let fen = game.as_fen();
 
@@ -153,16 +157,18 @@ impl Uci {
 
                 let promotion = if let Some(p) = iter.next() {
                     match p {
-                        'q' => { Some(Promotion::Queen) }
-                        'n' => { Some(Promotion::Knight) }
-                        'r' => { Some(Promotion::Rook) }
-                        'b' => { Some(Promotion::Bishop)}
+                        'q' => Some(Promotion::Queen),
+                        'n' => Some(Promotion::Knight),
+                        'r' => Some(Promotion::Rook),
+                        'b' => Some(Promotion::Bishop),
                         c => {
                             eprintln!("Unknown promotion letter, '{}'", c);
                             None
                         }
                     }
-                } else { None };
+                } else {
+                    None
+                };
 
                 return (y1 + x1, y2 + x2, promotion, alg_move.to_string());
             }
@@ -177,7 +183,7 @@ pub struct Limits {
     w_time: Option<NonZeroU64>,
     b_time: Option<NonZeroU64>,
     w_inc: Option<NonZeroU64>,
-    b_inc: Option<NonZeroU64>
+    b_inc: Option<NonZeroU64>,
 }
 
 impl Limits {
@@ -201,7 +207,7 @@ impl Limits {
         self
     }
 
-    pub fn set_time(&mut self, w_time: u64, b_time: u64)  {
+    pub fn set_time(&mut self, w_time: u64, b_time: u64) {
         self.w_time = NonZeroU64::new(w_time);
         self.b_time = NonZeroU64::new(b_time);
     }

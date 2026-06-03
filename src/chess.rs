@@ -592,8 +592,6 @@ impl Game {
             return MoveResult::Impossible;
         };
 
-        
-
         // Must move your own pieces
         if piece.color() != self.turn {
             return MoveResult::Impossible;
@@ -909,22 +907,17 @@ impl Game {
             return Vec::new();
         }
 
-        // if self.is_in_check(self.turn) {
-        //     // Check has a special subset of move calculations!
-        //     // mostly because check breaks path tracing algorithm defined below
-        //     return self.all_legal_check(loc);
-        // }
-        
         #[derive(PartialEq, Eq)]
         enum Legality {
             Legal,
             Illegal,
-            IllegalBecauseOfCheck
+            IllegalBecauseOfCheck,
         }
 
         // returns true if a move is legal
         let legal_move = |to: Pos| -> Legality {
-            let legal = self.is_legal_checkless(start, to, Some(Promotion::Queen)) == MoveResult::Valid;
+            let legal =
+                self.is_legal_checkless(start, to, Some(Promotion::Queen)) == MoveResult::Valid;
 
             if legal {
                 let mut copy = self.clone();
@@ -936,7 +929,11 @@ impl Game {
                 }
             }
 
-            if legal { Legality::Legal } else { Legality::Illegal }
+            if legal {
+                Legality::Legal
+            } else {
+                Legality::Illegal
+            }
         };
 
         let mut list = Vec::new();
@@ -948,8 +945,8 @@ impl Game {
             if legal == Legality::Legal {
                 list.push((x, y));
             }
-            
-            legal 
+
+            legal
         };
 
         let bishop_directions = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
@@ -1037,95 +1034,6 @@ impl Game {
         list
     }
 
-    // fn all_legal_check(&self, loc: usize) -> Vec<usize> {
-    //     let mut legal_moves = Vec::new();
-    //
-    //     let mut kpos = self.find_king(self.turn).unwrap();
-    //     let mut game = *self;
-    //     game.turn = !self.turn;
-    //
-    //     let mut threat_squares: Vec<usize> = Vec::new();
-    //
-    //     let mut try_move = |to: usize| {
-    //         let legal = self.is_legal_checkless(loc, to, Some(Promotion::Queen), false)
-    //             == MoveResult::Valid;
-    //
-    //         if legal {
-    //             let mut n_board = *self;
-    //             n_board.move_unchecked(loc,to, Some(Promotion::Queen));
-    //
-    //             // cannot play a move which puts self in check (or a move which keeps self in check)
-    //             if !n_board.is_in_check(self.turn) {
-    //                 legal_moves.push(to);
-    //             }
-    //         }
-    //     };
-    //
-    //     if self.board[loc].some_and(|p| *p == Piece::BKing || *p == Piece::WKing) {
-    //         // king cannot castle in check!!
-    //         try_move(loc + 1);
-    //         try_move(loc - 1);
-    //         try_move(loc + 8);
-    //         try_move(loc - 8);
-    //
-    //         try_move(loc + 7);
-    //         try_move(loc + 9);
-    //         try_move(loc - 7);
-    //         try_move(loc - 9);
-    //     }
-    //
-    //     if self.en_passant.is_some()
-    //         && self.board[loc].some_and(|p| *p == Piece::BPawn || *p == Piece::WPawn)
-    //     {
-    //         try_move(self.en_passant.unwrap().location());
-    //     }
-    //
-    //     for (pos, piece) in self.board.0.iter().copied().enumerate() {
-    //         let Some(piece) = piece else {
-    //             continue;
-    //         };
-    //
-    //         if piece.color() != self.turn && piece != Piece::WKing && piece != Piece::BKing {
-    //             // promotion just in case check is from pawn about to promote
-    //             let res = game.is_legal_checkless(pos, kpos, Some(Promotion::Queen), false);
-    //
-    //             if res == MoveResult::Valid {
-    //                 try_move(pos);
-    //
-    //                 match piece {
-    //                     Piece::WBishop
-    //                     | Piece::WRook
-    //                     | Piece::WQueen
-    //                     | Piece::BBishop
-    //                     | Piece::BRook
-    //                     | Piece::BQueen => {
-    //                         let (mut ox, mut oy) = ((pos % 8) as isize, (pos / 8) as isize);
-    //                         let (nx, ny) = ((kpos % 8) as isize, (kpos / 8) as isize);
-    //
-    //                         let rx = (nx - ox).signum();
-    //                         let ry = (ny - oy).signum();
-    //
-    //                         // 0, 0 was checked earlier
-    //                         ox += rx;
-    //                         oy += ry;
-    //
-    //                         // no path tracing bounds checks as those were already done in the is_legal_checkless method
-    //                         while ox != nx || oy != ny {
-    //                             try_move((oy * 8 + ox) as usize);
-    //
-    //                             ox += rx;
-    //                             oy += ry;
-    //                         }
-    //                     }
-    //                     _ => {}
-    //                 }
-    //             }
-    //         }
-    //     }
-    //
-    //     legal_moves
-    // }
-    //
     pub(crate) fn is_legal_move(
         &self,
         from: Pos,
@@ -1195,7 +1103,8 @@ impl Game {
         res
     }
 
-    // WARNING: does not check for legality of move
+    // WARNING: does not check for legality of move, this can lead to weird weird results, use
+    // move_checked if possible
     // returns false if piece did not exist
     // NOTE: this method updates en passant, castling,
     // clocks, turns, and promotions, also verifies promotions (pawn and last ranks)
@@ -1289,14 +1198,18 @@ impl Game {
         true
     }
 
-
-    pub(crate) fn get_move_effects(&mut self, from: Pos, to: Pos, promotion: Option<Promotion>) -> Option<MoveEffects> {
+    pub(crate) fn get_move_effects(
+        &mut self,
+        from: Pos,
+        to: Pos,
+        promotion: Option<Promotion>,
+    ) -> Option<MoveEffects> {
         let piece = self.board[from]?;
 
         let mut effects = MoveEffects {
             lost_piece: None,
             piece_moves: ((from, to, piece), None),
-            gained_piece: None
+            gained_piece: None,
         };
 
         let is_pawn = matches!(piece, Piece::BPawn | Piece::WPawn);
@@ -1317,27 +1230,23 @@ impl Game {
             && let Some(promotion) = promotion
             && (to.1 == 0 || to.1 == 7)
         {
-            effects.gained_piece = Some((to, piece, Piece::from_promotion(promotion, piece.color())));
+            effects.gained_piece =
+                Some((to, piece, Piece::from_promotion(promotion, piece.color())));
         } else if matches!(piece, Piece::WKing | Piece::BKing) && to.0.abs_diff(from.0) == 2 {
             // since we don't check move eligiblity, let's just castle with whatever is there
 
             // if we're moving right, kingside
             if to.0 > from.0 {
-                effects.piece_moves.1 = Some(
-                    ((7, to.1), (to.0 - 1, to.1), self.board[(7, to.1)]?)
-                );
+                effects.piece_moves.1 = Some(((7, to.1), (to.0 - 1, to.1), self.board[(7, to.1)]?));
             }
             // queenside
             else {
-                effects.piece_moves.1 = Some(
-                    ((0, to.1), (to.0 + 1, to.1), self.board[(0, to.1)]?)
-                );
+                effects.piece_moves.1 = Some(((0, to.1), (to.0 + 1, to.1), self.board[(0, to.1)]?));
             }
         }
 
         Some(effects)
     }
-
 }
 
 pub type PieceMove = (Pos, Pos, Piece);
@@ -1346,10 +1255,10 @@ pub(crate) struct MoveEffects {
     // if a piece is taken, including en passant
     pub(crate) lost_piece: Option<(Pos, Piece)>,
 
-    // only 2 if castle 
+    // only 2 if castle
     pub(crate) piece_moves: (PieceMove, Option<PieceMove>),
 
     // this is for promotion
     // Position of promotion, Piece that promoted, Piece that was promoted to
-    pub(crate) gained_piece: Option<(Pos, Piece, Piece)>
+    pub(crate) gained_piece: Option<(Pos, Piece, Piece)>,
 }
