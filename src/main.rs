@@ -1,18 +1,21 @@
 #![allow(unused)]
 #![windows_subsystem = "windows"]
 
-mod uci;
 mod chess;
+mod uci;
 
-use std::collections::HashMap;
-use std::time::Duration;
-use macroquad::audio::{load_sound, play_sound_once, Sound};
-use macroquad::{color, hash};
 use crate::uci::{Limits, ThreadedUci};
+use macroquad::audio::{Sound, load_sound, play_sound_once};
+use macroquad::{Error, color, hash};
+use std::cmp::min;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
+use crate::chess::{
+    Board, BoardIter, Game, MoveEffects, MoveResult, PROMOTIONS, Piece, Pos, Promotion,
+};
 use macroquad::prelude::*;
-use macroquad::ui::{root_ui, Skin};
-use crate::chess::{Piece, Game, IsSomeAnd, MoveResult, Promotion, PROMOTIONS};
+use macroquad::ui::{Skin, root_ui};
 
 const TL_GRAY: Color = Color::new(0.20, 0.20, 0.20, 0.2);
 const TD_GRAY: Color = Color::new(0.10, 0.10, 0.10, 0.4);
@@ -23,13 +26,15 @@ async fn main() {
     request_new_screen_size(480.0, 360.0);
     next_frame().await;
 
-    let button_style = root_ui().style_builder()
+    let button_style = root_ui()
+        .style_builder()
         .font_size(40)
         .color(BEIGE)
         .color_hovered(BROWN)
         .build();
 
     let checkbox_style = root_ui().style_builder()
+        .style_builder()
         .font_size(40)
         .color(RED)
         .color_selected(GREEN)
@@ -44,7 +49,7 @@ async fn main() {
         ..default
     });
 
-    let mut two_player= false;
+    let mut two_player = false;
     let mut white = true;
     let mut flip = false;
 
@@ -52,7 +57,16 @@ async fn main() {
         clear_background(GRAY);
 
         if root_ui().button(None, "Play") {
-           play_game(two_player, if white { chess::Color::White } else { chess::Color::Black}, !flip && !white).await;
+            play_game(
+                two_player,
+                if white {
+                    chess::Color::White
+                } else {
+                    chess::Color::Black
+                },
+                !flip && !white,
+            )
+            .await;
         }
 
         root_ui().checkbox(hash!(), "Two player?", &mut two_player);
@@ -62,507 +76,747 @@ async fn main() {
     }
 }
 
+#[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
+enum ChessSound {
+    Move,
+    Castle,
+    Capture,
+    Check,
+}
+
+struct GuiGame {
+    piece_textures: HashMap<Piece, Texture2D>,
+    sounds: HashMap<ChessSound, Sound>,
+    light_square_texture: Texture2D,
+    dark_square_texture: Texture2D,
+
+    animations: Vec<Box<dyn Animation>>,
+
+    top_left: Vec2,
+    size: f32,
+    flipped: bool,
+
+    complete: bool,
+
+    selected_square: Option<Pos>,
+    held: bool,
+
+    promotion: Option<(Pos, Pos, bool)>
+}
+
+impl GuiGame {
+    async fn load_from_files() -> Result<Self, Error> {
+        let piece_textures = HashMap::from([
+            (Piece::WPawn, load_texture("assets/wP.png").await?),
+            (Piece::WKnight, load_texture("assets/wN.png").await?),
+            (Piece::WBishop, load_texture("assets/wB.png").await?),
+            (Piece::WRook, load_texture("assets/wR.png").await?),
+            (Piece::WQueen, load_texture("assets/wQ.png").await?),
+            (Piece::WKing, load_texture("assets/wK.png").await?),
+            (Piece::BPawn, load_texture("assets/bP.png").await?),
+            (Piece::BKnight, load_texture("assets/bN.png").await?),
+            (Piece::BBishop, load_texture("assets/bB.png").await?),
+            (Piece::BRook, load_texture("assets/bR.png").await?),
+            (Piece::BQueen, load_texture("assets/bQ.png").await?),
+            (Piece::BKing, load_texture("assets/bK.png").await?),
+        ]);
+
+        let sounds = HashMap::from([
+            (ChessSound::Move, load_sound("assets/default.ogg").await?),
+            (ChessSound::Castle, load_sound("assets/castle.ogg").await?),
+            (ChessSound::Capture, load_sound("assets/capture.ogg").await?),
+            (ChessSound::Check, load_sound("assets/check.ogg").await?),
+        ]);
+
+        let light_square_texture = load_texture("assets/square_1.png").await?;
+        let dark_square_texture = load_texture("assets/square_2.png").await?;
+
+        Ok(GuiGame {
+            piece_textures,
+            sounds,
+            light_square_texture,
+            dark_square_texture,
+
+            top_left: Vec2::splat(0.),
+            size: 1024.,
+            flipped: false,
+            complete: false,
+
+            selected_square: None,
+            held: false,
+
+            animations: Vec::new(),
+
+            promotion: None
+        })
+    }
+
+    fn get_texture(&self, piece: Piece) -> &Texture2D {
+        self.piece_textures.get(&piece).unwrap()
+    }
+
+    fn get_px(&self, x: isize) -> f32 {
+        x as f32 * (self.size / 8.) + self.top_left.x
+    }
+
+    fn get_py(&self, y: isize) -> f32 {
+        (if self.flipped {
+            y as f32
+        } else {
+            (7. - y as f32)
+        }) * (self.size / 8.)
+            + self.top_left.y
+    }
+
+    fn get_x(&self, px: f32) -> isize {
+        ((px - self.top_left.x) / (self.size / 8.)) as isize
+    }
+
+    fn get_y(&self, py: f32) -> isize {
+        (if self.flipped {
+            (py - self.top_left.y) / (self.size / 8.)
+        } else {
+            8. - (py - self.top_left.y) / (self.size / 8.)
+        }) as isize
+    }
+}
+
 async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) {
-    let wp = load_texture("assets/wP.png").await.unwrap();
-    let wn = load_texture("assets/wN.png").await.unwrap();
-    let wb = load_texture("assets/wB.png").await.unwrap();
-    let wr = load_texture("assets/wR.png").await.unwrap();
-    let wq = load_texture("assets/wQ.png").await.unwrap();
-    let wk = load_texture("assets/wK.png").await.unwrap();
-
-    let bp = load_texture("assets/bP.png").await.unwrap();
-    let bn = load_texture("assets/bN.png").await.unwrap();
-    let bb = load_texture("assets/bB.png").await.unwrap();
-    let br = load_texture("assets/bR.png").await.unwrap();
-    let bq = load_texture("assets/bQ.png").await.unwrap();
-    let bk = load_texture("assets/bK.png").await.unwrap();
-
-    let default = load_sound("assets/default.ogg").await.unwrap();
-    let castle = load_sound("assets/castle.ogg").await.unwrap();
-    let capture = load_sound("assets/capture.ogg").await.unwrap();
-
-    let check_sound = load_sound("assets/check.ogg").await.unwrap();
-
-    let sounds = [default, capture, castle];
-
-    let square_1 = load_texture("assets/square_1.png").await.unwrap();
-    let square_2 = load_texture("assets/square_2.png").await.unwrap();
-
-    let get_texture = |piece: Piece| -> &Texture2D {
-        match piece {
-            Piece::WPawn => { &wp }
-            Piece::WKnight => { &wn }
-            Piece::WBishop => { &wb }
-            Piece::WRook => { &wr }
-            Piece::WQueen => { &wq }
-            Piece::WKing => { &wk }
-            Piece::BPawn => { &bp }
-            Piece::BKnight => { &bn }
-            Piece::BBishop => { &bb }
-            Piece::BRook => { &br }
-            Piece::BQueen => { &bq }
-            Piece::BKing => { &bk }
-        }
-    };
-
     let mut game = Game::default();
+    let mut ctx = GuiGame::load_from_files().await.unwrap();
 
-    // let two_player = true;
-    // let player_color = chess::Color::Black;
-    // let flipped = false;
-
-    let screen_size = 1024.0;
-    let square_size = screen_size / 8.0;
-    request_new_screen_size(screen_size, screen_size);
+    request_new_screen_size(1024.0, 1024.0);
     next_frame().await;
 
-    let mut selected_piece = None;
+    // let mut selected_piece = None;
 
-    let sf = ThreadedUci::new_delay(Duration::from_millis(1_000));
-    let limits = Limits::default().time(1_500);
+    let sf = ThreadedUci::new_delay(Duration::from_millis(500));
+    let limits = Limits::default().depth(18).time(150);
 
     if game.turn == !player_color && !two_player {
         sf.recommend_move(game, limits);
     }
 
-    let mut winner = None;
+    // let mut winner = None;
     let mut draw = false;
 
-    let mut animations: Vec<Animation> = Vec::new();
-
-    // convert y and x
-    let yc = |y: usize| if !flipped { 7 - y } else { y };
-    let xc = |x: usize| if flipped { 7 - x } else { x };
-
-    let rp = |u: usize| (xc(u % 8) as f32 * square_size, yc(u / 8) as f32 * square_size);
-    let bp = |s: usize| (xc(s % 8), yc(s / 8));
-
-    let mut promotion_square: Option<usize> = None;
-
-    let handle_move = |a1: Option<Animation>, a2: Option<Animation>, mut sound: &Sound, res: MoveResult,
-                       game: &Game, animations: &mut Vec<Animation>, winner: &mut Option<chess::Color>, draw: &mut bool| {
-        if !res.is_ok() { return; }
-
-        let mut play_check_sound = false; 
-
-        if res == MoveResult::Checkmate { *winner = Some(!game.turn); }
-        else if res == MoveResult::Check {
-            let pos = game.find_king(game.turn).unwrap();
-
-            let px = xc(pos % 8);
-            let py = yc(pos / 8);
-
-            let ca = check_animation(game.turn, ((px as f32 + 0.5) * square_size, (py as f32 + 0.5) * square_size), square_size / 2.0);
-            animations.push(ca);
-
-            play_check_sound = true;
-        } else if res == MoveResult::Stalemate || res == MoveResult::Draw {
-            *draw = true;
-        }
-
-        if let Some(a) = a1 { animations.push(a); }
-        if let Some(a) = a2 { animations.push(a); }
-        play_sound_once(if play_check_sound { &check_sound } else { sound });
-    };
+    // let mut animations: Vec<Animation> = Vec::new();
 
     loop {
-        clear_background(WHITE);
+        let size = f32::min(screen_height(), screen_width());
+        ctx.size = size;
 
-        if game.turn == !player_color && !two_player {
-            if let Some((s_pos, e_pos, pr, alg)) = sf.try_result() {
-                let a1 = primary_animation(&game, s_pos, e_pos, rp, bp);
-                let a2 = secondary_animation(&game, s_pos, e_pos, rp, bp);
-                let mut sound = get_sound(&game, s_pos, e_pos, &sounds);
+        render(&game, &ctx);
+        ctx.animations
+            .retain_mut(|animation| !animation.tick(get_frame_time()));
 
-                let res = game.move_checked(s_pos, e_pos, pr);
-                assert!(res.is_ok(), "Move {} was illegal at fen={}", alg, game.as_fen());
-
-                handle_move(a1, a2, &sound, res, &game, &mut animations, &mut winner, &mut draw);
-            }
-        }
-
-        for iy in 0..8 {
-            let y = square_size * iy as f32;
-            let mut x = 0.0;
-
-            for ix in 0..8 {
-                if (iy + ix) % 2 == 0 {
-                    draw_texture(&square_2, x, y, WHITE);
-                } else {
-                    draw_texture(&square_1, x, y, WHITE);
-                }
-
-                x += square_size;
-            }
-        }
-
-        if let Some(winner) = winner {
-            let pos = game.find_king(!winner).unwrap();
-
-            let px = xc(pos % 8);
-            let py = yc(pos / 8);
-
-            draw_circle((px as f32 + 0.5) * square_size, (py as f32 + 0.5) * square_size, square_size / 2.0, TD_RED);
-        } else if draw {
-            let pos = game.find_king(chess::Color::White).unwrap();
-
-            let px = xc(pos % 8);
-            let py = yc(pos / 8);
-
-            draw_circle((px as f32 + 0.5) * square_size, (py as f32 + 0.5) * square_size, square_size / 2.0, TD_GRAY);
-
-            let pos = game.find_king(chess::Color::Black).unwrap();
-
-            let px = xc(pos % 8);
-            let py = yc(pos / 8);
-
-            draw_circle((px as f32 + 0.5) * square_size, (py as f32 + 0.5) * square_size, square_size / 2.0, TD_GRAY);
-        }
-
-        // play all animations
-        let mut i = 0;
-        while animations.len() > i {
-            let animation = &mut animations[i];
-
-            if animation.draw_frame(get_texture) {
-                i += 1;
-            } else {
-                animations.remove(i);
-            }
-        }
-
-        for x in 0..8 {
-            'outer: for y in 0..8 {
-                let piece = game.board[yc(y) * 8 + xc(x)];
-
-                let dx = (square_size) * x as f32;
-                let dy = (square_size) * y as f32;
-
-                for animation in &animations {
-                    if let Some(r) = animation.render_exception() {
-                        if r.0 == x && r.1 == y { continue 'outer; }
-                    }
-                }
-
-                if let Some(piece) = piece {
-                    draw_texture(&get_texture(piece), dx, dy, WHITE);
-                }
-            }
-        }
-
-        if let Some(pos) = promotion_square {
-            let color = game.board[pos].unwrap().color();
-
-            let mut promotions: HashMap<usize, Piece> = HashMap::new();
-
-            if (color == chess::Color::White && !flipped) || (color == chess::Color::Black && flipped) {
-                let (dx, mut dy) = rp(pos);
-
-                draw_rectangle(dx, dy, square_size, square_size * 4.0, WHITE);
-
-                dy += square_size * 3.0;
-                let mut of = 32;
-                for i in PROMOTIONS {
-                    let piece = Piece::from_promotion(i, color);
-                    let texture = get_texture(piece);
-                    draw_texture(&texture,
-                                 dx, dy, WHITE);
-
-                    of -= 8;
-                    promotions.insert(pos - of, piece);
-
-                    dy -= square_size;
-                }
-            } else {
-                // render down to up
-                let (dx, mut dy) = rp(pos);
-                dy -= square_size * 3.0;
-                draw_rectangle(dx, dy, square_size, square_size * 4.0, WHITE);
-
-                let mut of = 32;
-                for i in PROMOTIONS {
-                    let piece = Piece::from_promotion(i, color);
-                    draw_texture(&get_texture(piece),
-                                 dx, dy, WHITE);
-
-                    of -= 8;
-                    promotions.insert(pos + of, piece);
-
-                    dy += square_size;
-                }
-            }
-
-            if is_mouse_button_pressed(MouseButton::Left) {
-                let (x1, y1) = mouse_position();
-
-                let px = (x1 / square_size).floor() as usize;
-                let py = (y1 / square_size).floor() as usize;
-
-                let c_pos = yc(py) * 8 + xc(px);
-
-                if let Some(promotion) = promotions.remove(&c_pos) {
-                    game.board[pos] = Some(promotion);
-                    promotion_square = None;
-                }
-
-                if game.is_in_checkmate(game.turn) { winner = Some(!game.turn); }
-                else if game.is_in_check(game.turn) {
-                    let pos = game.find_king(game.turn).unwrap();
-
-                    let px = xc(pos % 8);
-                    let py = yc(pos / 8);
-
-                    let ca = check_animation(game.turn, ((px as f32 + 0.5) * square_size, (py as f32 + 0.5) * square_size), square_size / 2.0);
-                    animations.push(ca);
-
-                    play_sound_once(&check_sound);
-                } else if game.is_draw() || game.is_stalemate() {
-                    draw = true;
-                }
-            }
-
-            next_frame().await;
-            continue;
-        }
-
-        // handle moving a piece
-        if is_mouse_button_pressed(MouseButton::Left) && selected_piece.is_some() && !draw && winner.is_none() {
-            if let Some((x, y)) = selected_piece {
-                let (x1, y1) = mouse_position();
-
-                let px = (x1 / square_size).floor() as usize;
-                let py = (y1 / square_size).floor() as usize;
-
-                let s_pos = yc(y) * 8 + xc(x);
-                let e_pos = yc(py) * 8 + xc(px);
-
-                let a1 = primary_animation(&game, s_pos, e_pos, rp, bp);
-                let a2 = secondary_animation(&game, s_pos, e_pos, rp, bp);
-                let mut sound = get_sound(&game, s_pos, e_pos, &sounds);
-
-                let res = game.move_checked(s_pos, e_pos, None);
-                if res.is_ok() {
-                    if !two_player { sf.recommend_move(game, limits); }
-
-                    handle_move(a1, a2, sound, res, &game, &mut animations, &mut winner, &mut draw);
-                    selected_piece = None;
-                } else if res == MoveResult::MissingPromotion && game.is_legal_move(s_pos, e_pos, Some(Promotion::Queen)).is_ok() {
-                    let o_pawn = game.board[s_pos];
-                    game.move_checked(s_pos, e_pos, Some(Promotion::Queen));
-                    game.board[e_pos] = o_pawn;
-
-                    promotion_square = Some(e_pos);
-                    selected_piece = None;
-                } else {
-                    let px = (x1 / square_size).floor() as usize;
-                    let py = (y1 / square_size).floor() as usize;
-
-                    let pos = yc(py) * 8 + xc(px);
-
-                    if game.board[pos].some_and(|x| x.color() == game.turn) {
-                        selected_piece = Some((px, py));
-                    } else { selected_piece = None; }
-                }
-            }
-        }
-        else if is_mouse_button_pressed(MouseButton::Left) && (game.turn == player_color || two_player) {
-            let (x, y) = mouse_position();
-
-            let px = (x / square_size).floor() as usize;
-            let py = (y / square_size).floor() as usize;
-
-            let pos = yc(py) * 8 + xc(px);
-
-            if game.board[pos].some_and(|x| x.color() == game.turn) {
-                selected_piece = Some((px, py));
-            }
-        }
-
-        if let Some((x, y)) = selected_piece {
-            // render circle on piece, render possible moves in little circles
-            let g_pos = yc(y) * 8 + xc(x);
-
-            draw_circle((x as f32 + 0.5) * square_size, (y as f32 + 0.5) * square_size, square_size / 2.0 - square_size / 5.0, TL_GRAY);
-
-            for pos in game.all_legal_moves(g_pos) {
-                let y = yc(pos / 8);
-                let x = xc(pos % 8);
-
-                if game.board[pos].is_some() || (game.en_passant.some_and(|x| x.location() == pos)
-                    && game.board[g_pos].some_and(|x| *x == Piece::BPawn || *x == Piece::WPawn)) {
-                    draw_circle((x as f32 + 0.5) * square_size, (y as f32 + 0.5) * square_size, square_size / 10.0, TD_RED);
-                } else {
-                    draw_circle((x as f32 + 0.5) * square_size, (y as f32 + 0.5) * square_size, square_size / 10.0, TD_GRAY);
-                }
-            }
+        if let Some(promotion) = ctx.promotion {
+            handle_promotion(&mut game, &mut ctx, promotion);
+        } else {
+            handle_input(&mut game, &mut ctx);
         }
 
         next_frame().await;
     }
 }
 
-#[derive(Debug)]
-enum AnimationType {
-    // end_pos, no_render_pos
-    Move(f32, f32, usize, usize),
-    // radius
-    Check(f32),
-    Disappear,
+fn render(game: &Game, tctx: &GuiGame) {
+    let board = game.board;
+    let square_size = tctx.size / 8.0;
+
+    let map_x = |x: isize| tctx.get_px(x);
+    let map_y = |y: isize| tctx.get_py(y);
+
+    for (x, y) in BoardIter::default() {
+        let is_dark_square = (x + y) % 2 == 0;
+
+        if is_dark_square {
+            draw_texture_ex(
+                &tctx.dark_square_texture,
+                map_x(x),
+                map_y(y),
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(Vec2::splat(square_size)),
+                    ..Default::default()
+                },
+            );
+        } else {
+            draw_texture_ex(
+                &tctx.light_square_texture,
+                map_x(x),
+                map_y(y),
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(Vec2::splat(square_size)),
+                    ..Default::default()
+                },
+            );
+        }
+
+        if let Some(piece) = board[(x, y)] {
+            if let Some(selected) = tctx.selected_square
+                && selected == (x, y)
+                && tctx.held
+            {
+                continue;
+            }
+
+            if tctx
+                .animations
+                .iter()
+                .any(|a| a.prevent_drawing() == (x, y))
+            {
+                continue;
+            }
+
+            draw_texture_ex(
+                tctx.get_texture(piece),
+                map_x(x),
+                map_y(y),
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(Vec2::splat(square_size)),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    if let Some(square) = tctx.selected_square {
+        let moves = game.all_legal_moves(square);
+
+        for cmove in moves {
+            let occupied = board[cmove].is_some();
+
+            draw_poly(
+                map_x(cmove.0) + square_size / 2.,
+                map_y(cmove.1) + square_size / 2.,
+                255,
+                square_size / 7.,
+                0.,
+                if occupied {
+                    Color::from_rgba(150, 0, 0, 120)
+                } else {
+                    Color::from_rgba(70, 70, 70, 120)
+                },
+            );
+        }
+    }
+
+    if let Some(selected) = tctx.selected_square
+        && tctx.held
+        && let Some(piece) = board[selected]
+    {
+        let (px, py) = mouse_position();
+
+        draw_texture_ex(
+            tctx.get_texture(piece),
+            px - square_size / 2.,
+            py - square_size / 2.,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(Vec2::splat(square_size)),
+                ..Default::default()
+            },
+        );
+    }
+
+    // render checks
+    if game.is_in_check(game.turn) && tctx.animations.iter().all(|a| !a.prevent_king_decoration()) {
+        let (x, y) = board.find_king(game.turn).unwrap();
+
+        draw_poly(
+            map_x(x) + square_size / 2.,
+            map_y(y) + square_size / 2.,
+            255,
+            square_size / 3.,
+            0.,
+            TD_RED,
+        );
+    }
+
+    if (game.is_draw() | game.is_stalemate())
+        && tctx.animations.iter().all(|a| !a.prevent_king_decoration())
+    {
+        let (x, y) = board.find_king(game.turn).unwrap();
+
+        draw_poly(
+            map_x(x) + square_size / 2.,
+            map_y(y) + square_size / 2.,
+            255,
+            square_size / 3.,
+            0.,
+            TD_GRAY,
+        );
+    }
+
+    for animation in &tctx.animations {
+        animation.draw(tctx);
+    }
 }
 
-#[derive(Debug)]
-struct Animation {
-    animation_type: AnimationType,
+fn handle_input(game: &mut Game, tctx: &mut GuiGame) {
+    let square_size = tctx.size / 8.0;
+
+    // let map_x = |x: isize| x as f32 * square_size + tctx.top_left.x;
+    // let map_y = |y: isize| if tctx.flipped { y as f32 } else { (7. - y as f32) } * square_size + tctx.top_left.y;
+
+    let map_px = |x: f32| tctx.get_x(x);
+    let map_py = |y: f32| tctx.get_y(y);
+
+    let (px, py) = mouse_position();
+
+    let x = map_px(px);
+    let y = map_py(py);
+
+    if x > 7 || y > 7 || x < 0 || y < 0 {
+        return;
+    }
+
+    if is_mouse_button_pressed(MouseButton::Left)
+        && let Some(square) = tctx.selected_square
+        && game.is_legal_move(square, (x, y), Some(Promotion::Queen)).is_ok()
+    {
+        // do the move
+        let effects = game.get_move_effects(square, (x, y), None);
+        let mut result = game.move_checked(square, (x, y), None);
+
+        if result == MoveResult::MissingPromotion {
+            tctx.promotion = Some(
+                 (square, (x, y), false)
+            );
+        } else {
+            // play animations
+            add_animations(
+                &mut tctx.animations,
+                effects,
+                result,
+                game.board.find_king(game.turn),
+                false,
+            );
+        }
+    }
+
+    if is_mouse_button_down(MouseButton::Left) {
+        if !tctx.held
+            && tctx
+                .animations
+                .iter()
+                .all(|a| a.prevent_drawing() != (x, y))
+        {
+            tctx.held = true;
+            tctx.selected_square = Some((x, y));
+        }
+    } else if is_mouse_button_released(MouseButton::Left) {
+        if let Some(selected) = tctx.selected_square
+            && tctx.held
+            && game.is_legal_move(selected, (x, y), Some(Promotion::Queen)).is_ok()
+        {
+            // do the move
+            let effects = game.get_move_effects(selected, (x, y), None);
+            let result = game.move_checked(selected, (x, y), None);
+
+            if result == MoveResult::MissingPromotion {
+                tctx.promotion = Some(
+                     (selected, (x, y), true)
+                );
+            } else {
+                // play animations
+                add_animations(
+                    &mut tctx.animations,
+                    effects,
+                    result,
+                    game.board.find_king(game.turn),
+                    true,
+                );
+            }
+        }
+
+        tctx.held = false;
+    }
+}
+
+fn handle_promotion(game: &mut Game, ctx: &mut GuiGame, (from, to, skip_primary): (Pos, Pos, bool)) {
+    let color = game.turn;
+    const PROMOTIONS: [Promotion; 4] = [Promotion::Queen, Promotion::Knight, Promotion::Rook, Promotion::Bishop];
+    ctx.held = false;
+
+    draw_rectangle_ex(
+        ctx.top_left.x, 
+        ctx.top_left.y, 
+        ctx.size, 
+        ctx.size, 
+        DrawRectangleParams {
+            color: GRAY.with_alpha(0.2),
+            ..Default::default()
+        }
+    );
+
+    for i in 0..4 {
+        let px = ctx.get_px(to.0);
+        let y = if to.1 == 7 { to.1 - i } else { to.1 + i };
+        let py = ctx.get_py(y);
+
+        draw_poly(
+            px + ctx.size / 16.,
+            py + ctx.size / 16.,
+            255,
+            ctx.size / 16.,
+            0.,
+            GRAY,
+        );
+
+        draw_texture_ex(
+            ctx.get_texture(Piece::from_promotion(PROMOTIONS[i as usize], color)),
+            px,
+            py,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(Vec2::splat(ctx.size / 8.)),
+                ..Default::default()
+            },
+        );
+    }
+
+    let (px, py) = mouse_position();
+    let x = ctx.get_x(px);
+    let y = ctx.get_y(py);
+
+    if is_mouse_button_pressed(MouseButton::Left) && x == to.0 {
+        let idx = if to.1 == 7 {
+            7 - y
+        } else {
+            y
+        };
+
+        if (0..4).contains(&idx) {
+            let promotion = Some(PROMOTIONS[idx as usize]);
+
+            let effects = game.get_move_effects(from, to, promotion);
+            let mut result = game.move_checked(from, to, promotion);
+
+            add_animations(
+                &mut ctx.animations,
+                effects,
+                result,
+                game.board.find_king(game.turn),
+                skip_primary,
+            );
+
+            ctx.promotion = None;
+        }
+    }
+}
+
+trait Animation {
+    fn prevent_drawing(&self) -> (isize, isize);
+    fn prevent_king_decoration(&self) -> bool {
+        false
+    }
+
+    fn tick(&mut self, ms: f32) -> bool;
+    fn draw(&self, tctx: &GuiGame);
+}
+
+fn add_animations(
+    vec: &mut Vec<Box<dyn Animation>>,
+    effects: Option<MoveEffects>,
+    result: MoveResult,
+    king_pos: Option<Pos>,
+    skip_primary: bool,
+) {
+    if let Some(effects) = effects {
+        let first = effects.piece_moves.0;
+
+        if let Some(prom) = effects.gained_piece {
+            if skip_primary {
+                vec.push(Box::new(PieceFade {
+                    piece: prom.1,
+                    pos: first.1,
+                    elapsed: 0.,
+                    fade_in: false,
+                    hide_piece: true
+                }));
+
+                vec.push(Box::new(PieceFade {
+                    piece: prom.2,
+                    pos: first.1,
+                    elapsed: 0.,
+                    fade_in: true,
+                    hide_piece: true
+                }));
+            } else {
+                vec.push(Box::new(PieceMoveFadeTransform {
+                    start_piece: prom.1,
+                    end_piece: prom.2,
+                    start: first.0,
+                    end: first.1,
+                    elapsed: 0.,
+                }));
+            }
+        } else if !skip_primary {
+            vec.push(Box::new(PieceMove {
+                piece: first.2,
+                start: first.0,
+                end: first.1,
+                elapsed: 0.,
+            }));
+        }
+
+        if let Some(second) = effects.piece_moves.1 {
+            vec.push(Box::new(PieceMove {
+                piece: second.2,
+                start: second.0,
+                end: second.1,
+                elapsed: 0.,
+            }));
+        }
+
+        if let Some(lost) = effects.lost_piece {
+            vec.push(Box::new(PieceFade {
+                piece: lost.1,
+                pos: lost.0,
+                elapsed: 0.,
+                fade_in: false,
+                hide_piece: false
+            }));
+        }
+
+        if let Some(pos) = king_pos && matches!(result, MoveResult::Check | MoveResult::Checkmate) {
+            vec.push(Box::new(DecorationAnim {
+                pos,
+                elapsed: 0.,
+                final_color: TD_RED
+            }));
+        }
+
+        if let Some(pos) = king_pos && matches!(result, MoveResult::Draw | MoveResult::Stalemate) {
+            vec.push(Box::new(DecorationAnim {
+                pos,
+                elapsed: 0.,
+                final_color: TD_GRAY
+            }));
+        }
+    }
+}
+
+struct PieceMove {
     piece: Piece,
-    position: (f32, f32),
-    remaining_time: f32,
-    total_time: f32
+    start: (isize, isize),
+    end: (isize, isize),
+    elapsed: f32,
 }
 
-impl Animation {
-    fn draw_frame<'a>(&mut self, texture_provider: impl FnOnce(Piece) -> &'a Texture2D) -> bool {
-        self.remaining_time -= get_frame_time();
+impl PieceMove {
+    const ANIMATION_TIME: f32 = 0.150;
 
-        if 0.0 >= self.remaining_time {
-            // animation is over
-            return false;
-        }
+    fn easing(&self) -> f32 {
+        let x = self.elapsed / Self::ANIMATION_TIME;
+        // simplest ease function is just 'x'
+        let ease = f32::sqrt(1. - f32::powi(x - 1., 2));
+        f32::min(ease, 1.)
+    }
+}
 
-        let progress = (self.total_time - self.remaining_time) / self.total_time;
+impl Animation for PieceMove {
+    fn prevent_drawing(&self) -> (isize, isize) {
+        self.end
+    }
 
-        match self.animation_type {
-            AnimationType::Move(ex, ey, _, _) => {
-                draw_texture(texture_provider(self.piece),
-                             (ex - self.position.0) * progress + self.position.0,
-                             (ey - self.position.1) * progress + self.position.1,
-                             WHITE);
-            }
-            AnimationType::Disappear => {
-                draw_texture(texture_provider(self.piece), self.position.0, self.position.1,
-                             Color::new(1.0, 1.0, 1.0, 1.0 - progress))
-            }
-            AnimationType::Check(r) => {
-                let opacity = (0.5 - (progress - 0.5).abs()) * 2.0;
-                let mut color = TD_RED;
-                color.a = opacity;
+    fn tick(&mut self, ms: f32) -> bool {
+        self.elapsed += ms;
+        self.elapsed >= Self::ANIMATION_TIME
+    }
 
-                draw_circle(self.position.0, self.position.1, r, color);
-            }
-        }
+    fn draw(&self, tctx: &GuiGame) {
+        let prog = self.easing();
 
+        let sx = tctx.get_px(self.start.0);
+        let sy = tctx.get_py(self.start.1);
+
+        let ex = tctx.get_px(self.end.0);
+        let ey = tctx.get_py(self.end.1);
+
+        draw_texture_ex(
+            tctx.get_texture(self.piece),
+            prog * ex + (1. - prog) * sx,
+            prog * ey + (1. - prog) * sy,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(Vec2::splat(tctx.size / 8.)),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+struct PieceFade {
+    piece: Piece,
+    pos: (isize, isize),
+    elapsed: f32,
+    fade_in: bool,
+    hide_piece: bool
+}
+
+impl PieceFade {
+    const ANIMATION_TIME: f32 = 0.150;
+
+    fn easing(&self) -> f32 {
+        let x = self.elapsed / Self::ANIMATION_TIME;
+        // https://easings.net/
+        let ease = 1. - (1. - x) * (1. - x);
+        f32::min(ease, 1.)
+    }
+}
+
+impl Animation for PieceFade {
+    fn prevent_drawing(&self) -> (isize, isize) {
+        if self.hide_piece { self.pos } else { (-1, -1) }
+    }
+
+    fn tick(&mut self, ms: f32) -> bool {
+        self.elapsed += ms;
+        self.elapsed >= Self::ANIMATION_TIME
+    }
+
+    fn draw(&self, tctx: &GuiGame) {
+        let prog = if self.fade_in {
+            self.easing()
+        } else {
+            1. - self.easing()
+        };
+
+        let sx = tctx.get_px(self.pos.0);
+        let sy = tctx.get_py(self.pos.1);
+
+        draw_texture_ex(
+            tctx.get_texture(self.piece),
+            sx,
+            sy,
+            WHITE.with_alpha(prog),
+            DrawTextureParams {
+                dest_size: Some(Vec2::splat(tctx.size / 8.)),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+struct DecorationAnim {
+    pos: (isize, isize),
+    elapsed: f32,
+    final_color: Color,
+}
+
+impl DecorationAnim {
+    const ANIMATION_TIME: f32 = 0.150;
+
+    fn easing(&self) -> f32 {
+        let x = self.elapsed / Self::ANIMATION_TIME;
+        // https://easings.net/
+        let ease = 1. - (1. - x) * (1. - x);
+        f32::min(ease, 1.)
+    }
+}
+
+impl Animation for DecorationAnim {
+    fn prevent_drawing(&self) -> (isize, isize) {
+        (-1, -1)
+    }
+
+    fn prevent_king_decoration(&self) -> bool {
         true
     }
 
-    fn render_exception(&self) -> Option<(usize, usize)> {
-        match self.animation_type {
-            AnimationType::Move(_, _, ux, uy) => { Some((ux, uy)) }
-            _ => { None }
-        }
+    fn tick(&mut self, ms: f32) -> bool {
+        self.elapsed += ms;
+        self.elapsed >= Self::ANIMATION_TIME
+    }
+
+    fn draw(&self, tctx: &GuiGame) {
+        let prog = self.easing();
+
+        let sx = tctx.get_px(self.pos.0);
+        let sy = tctx.get_py(self.pos.1);
+
+        let color = self.final_color.with_alpha(self.final_color.a * prog);
+
+        draw_poly(
+            sx + tctx.size / 16.,
+            sy + tctx.size / 16.,
+            255,
+            tctx.size / 24.,
+            0.,
+            color,
+        );
     }
 }
 
-const ANIMATION_TIME: f32 = 0.1;
-fn primary_animation(game: &Game, from: usize, to: usize,
-                                render_location: impl FnOnce(usize) -> (f32, f32) + Copy,
-                                block_location: impl FnOnce(usize) -> (usize, usize)) -> Option<Animation> {
-    let Some(piece) = game.board[from] else { return None; };
-
-    let (ex, ey) = render_location(to);
-    let (ux, uy) = block_location(to);
-
-    Some(Animation {
-        animation_type: AnimationType::Move(ex, ey, ux, uy),
-        piece,
-        position: render_location(from),
-        remaining_time: ANIMATION_TIME,
-        total_time: ANIMATION_TIME,
-    })
+struct PieceMoveFadeTransform {
+    start_piece: Piece,
+    end_piece: Piece,
+    start: (isize, isize),
+    end: (isize, isize),
+    elapsed: f32,
 }
 
-fn secondary_animation(game: &Game, from: usize, to: usize,
-                                  render_location: impl FnOnce(usize) -> (f32, f32) + Copy,
-                                  block_location: impl FnOnce(usize) -> (usize, usize)) -> Option<Animation> {
-    let Some(piece) = game.board[from] else { return None; };
+impl PieceMoveFadeTransform {
+    const ANIMATION_TIME: f32 = 0.150;
 
-    // check if move is en_passant
-    if let Some(en_passant) = game.en_passant {
-        if en_passant.location() == to && (piece == Piece::BPawn || piece == Piece::WPawn) {
-            let Some(lost) = game.board[en_passant.pawn_lost_pos()] else { return None; };
-
-            return Some(Animation {
-                animation_type: AnimationType::Disappear,
-                piece: lost,
-                position: render_location(en_passant.pawn_lost_pos()),
-                remaining_time: ANIMATION_TIME,
-                total_time: ANIMATION_TIME,
-            })
-        }
+    fn easing_move(&self) -> f32 {
+        let x = self.elapsed / Self::ANIMATION_TIME;
+        let ease = f32::sqrt(1. - f32::powi(x - 1., 2));
+        f32::min(ease, 1.)
     }
 
-    if (piece == Piece::BKing || piece == Piece::WKing) && (to % 8).abs_diff(from % 8) == 2 {
-        let (rook_from, rook_to) = if to % 8 > from % 8 {
-            (from + 3, to - 1)
-        } else {
-            (from - 4, to + 1)
-        };
-
-        let (ex, ey) = render_location(rook_to);
-        let (ux, uy) = block_location(rook_to);
-
-        let Some(rook) = game.board[rook_from] else { return None; };
-
-        return Some(Animation {
-            animation_type: AnimationType::Move(ex, ey, ux, uy),
-            piece: rook,
-            position: render_location(rook_from),
-            remaining_time: ANIMATION_TIME,
-            total_time: ANIMATION_TIME,
-        })
-    }
-    
-    if let Some(taken) = game.board[to] {
-        return Some(Animation {
-            animation_type: AnimationType::Disappear,
-            piece: taken,
-            position: render_location(to),
-            remaining_time: ANIMATION_TIME,
-            total_time: ANIMATION_TIME,
-        })
-    }
-    
-    None
-}
-
-fn check_animation(color: chess::Color, center: (f32, f32), radius: f32) -> Animation {
-    Animation {
-        animation_type: AnimationType::Check(radius),
-        piece: match color {
-            chess::Color::White => { Piece::WKing }
-            chess::Color::Black => { Piece::BKing }
-        },
-        position: center,
-        remaining_time: ANIMATION_TIME * 5.0,
-        total_time: ANIMATION_TIME * 5.0,
+    fn easing_fade(&self) -> f32 {
+        let x = self.elapsed / Self::ANIMATION_TIME;
+        let ease = 1. - (1. - x) * (1. - x);
+        f32::min(ease, 1.)
     }
 }
 
-fn get_sound<'a, 'b>(game: &'b Game, from: usize, to: usize, sounds: &'a [Sound; 3]) -> &'a Sound {
-    let Some(piece) = game.board[from] else { return &sounds[0]; };
-
-    // check if move is en_passant
-    if let Some(en_passant) = game.en_passant {
-        if en_passant.location() == to && (piece == Piece::BPawn || piece == Piece::WPawn) {
-            return &sounds[1];
-        }
+impl Animation for PieceMoveFadeTransform {
+    fn prevent_drawing(&self) -> (isize, isize) {
+        self.end
     }
 
-    if (piece == Piece::BKing || piece == Piece::WKing) && (to % 8).abs_diff(from % 8) == 2 {
-        return &sounds[2];
+    fn tick(&mut self, ms: f32) -> bool {
+        self.elapsed += ms;
+        self.elapsed >= Self::ANIMATION_TIME
     }
 
-    if let Some(taken) = game.board[to] {
-        return &sounds[1];
-    }
+    fn draw(&self, tctx: &GuiGame) {
+        let pm = self.easing_move();
+        let pf = self.easing_fade();
 
-    &sounds[0]
+        let sx = tctx.get_px(self.start.0);
+        let sy = tctx.get_py(self.start.1);
+
+        let ex = tctx.get_px(self.end.0);
+        let ey = tctx.get_py(self.end.1);
+
+        draw_texture_ex(
+            tctx.get_texture(self.start_piece),
+            pm * ex + (1. - pm) * sx,
+            pm * ey + (1. - pm) * sy,
+            WHITE.with_alpha(1. - pf),
+            DrawTextureParams {
+                dest_size: Some(Vec2::splat(tctx.size / 8.)),
+                ..Default::default()
+            },
+        );
+
+        draw_texture_ex(
+            tctx.get_texture(self.end_piece),
+            pm * ex + (1. - pm) * sx,
+            pm * ey + (1. - pm) * sy,
+            WHITE.with_alpha(pf),
+            DrawTextureParams {
+                dest_size: Some(Vec2::splat(tctx.size / 8.)),
+                ..Default::default()
+            },
+        );
+    }
 }

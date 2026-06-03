@@ -94,6 +94,8 @@ pub struct Uci {
     process: Child
 }
 
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 impl Uci {
     #[cfg(windows)]
     pub(crate) fn new() -> Self {
