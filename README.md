@@ -9,7 +9,7 @@ and second letter 'K' 'P' 'Q' 'R' 'B' 'N' signifies piece
 
 in png format, for example 'wK.png' is the white king image file
 
-**textures must be 128x128**
+**textures must be square**
 
 For sounds
 1) default.ogg - default move sound
@@ -18,20 +18,14 @@ For sounds
 4) castle.ogg - castle move sound
 
 Square textures
-128x128
-square_1.png & square_2.png
+square_1.png (light squares) & square_2.png (dark squares)
 
-the engine is any uci compatible engine, called from uci.bat
+the engine is any uci compatible engine, called from uci.bat/uci.sh
 
 release build is setup with MAIA 1900, an engine meant to act like a human player with around 1900 elo
 
 
 ### Preview:
-
-
-
-
-
 <img width="596" height="465" alt="Screenshot 2026-06-03 212623" src="https://github.com/user-attachments/assets/8adf5510-1e76-4d3f-8633-7c6ca92c4b1a" />
 
 https://github.com/user-attachments/assets/b4fa20bd-4202-4fe9-97fa-173e48b658f7
