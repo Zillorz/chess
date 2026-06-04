@@ -19,28 +19,33 @@ const TD_RED: Color = Color::new(0.92, 0.20, 0.20, 0.5);
 
 #[macroquad::main("Chess")]
 async fn main() {
-    request_new_screen_size(480.0, 360.0);
+    request_new_screen_size(400.0, 280.0);
     next_frame().await;
-
-    let button_style = root_ui()
-        .style_builder()
-        .font_size(40)
-        .color(BEIGE)
-        .color_hovered(BROWN)
-        .build();
 
     let checkbox_style = root_ui()
         .style_builder()
-        .font_size(40)
         .color(RED)
         .color_selected(GREEN)
-        .font_size(32)
+        .build();
+
+    let button_style = root_ui()
+        .style_builder()
+        .font_size(50)
+        .margin(RectOffset::new(12., 12., 10., 10.))
+        .color(BLUE)
+        .color_hovered(DARKBLUE)
+        .build();
+
+    let window_style = root_ui()
+        .style_builder()
+        .background(Image::gen_image_color(1000, 1000, GRAY))
         .build();
 
     let default = root_ui().default_skin();
     root_ui().push_skin(&Skin {
         button_style,
         checkbox_style,
+        window_style,
         margin: 5.0,
         ..default
     });
@@ -52,7 +57,18 @@ async fn main() {
     loop {
         clear_background(GRAY);
 
-        if root_ui().button(None, "Play") {
+        root_ui().window(
+            hash!(),
+            Vec2::new(-170.0, 0.0),
+            Vec2::new(600.0, 120.0),
+            |ui| {
+                ui.checkbox(hash!(), "Two player?", &mut two_player);
+                ui.checkbox(hash!(), "Are you playing with white?", &mut white);
+                ui.checkbox(hash!(), "Is white always on the bottom?", &mut flip);
+            },
+        );
+
+        if root_ui().button(Vec2::new(150.0, 150.0), "Play") {
             play_game(
                 two_player,
                 if white {
@@ -65,9 +81,6 @@ async fn main() {
             .await;
         }
 
-        root_ui().checkbox(hash!(), "Two player?", &mut two_player);
-        root_ui().checkbox(hash!(), "Are you playing with white?", &mut white);
-        root_ui().checkbox(hash!(), "Is white always on the bottom?", &mut flip);
         next_frame().await;
     }
 }
@@ -211,9 +224,17 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
     request_new_screen_size(1024.0, 1024.0);
     next_frame().await;
 
+    if let Some(uci) = &ctx.uci
+        && game.turn != ctx.player_color
+        && !ctx.two_player
+    {
+        uci.recommend_move(game, Limits::default());
+    }
+
     loop {
         let size = f32::min(screen_height(), screen_width());
         ctx.size = size;
+
         if let Some(uci) = &ctx.uci
             && let Some((from, to, prom, _)) = uci.try_result()
             && !ctx.two_player
@@ -322,12 +343,21 @@ fn render(game: &Game, ctx: &GuiGame) {
         );
     }
 
-    let draw_circle_at = |x, y, c| draw_poly(ctx.get_px(x) + square_size / 2., ctx.get_py(y) + square_size / 2., 255, square_size / 3., 0., c);
+    let draw_circle_at = |x, y, c| {
+        draw_poly(
+            ctx.get_px(x) + square_size / 2.,
+            ctx.get_py(y) + square_size / 2.,
+            255,
+            square_size / 3.,
+            0.,
+            c,
+        )
+    };
 
     // show selected square
     if let Some((x, y)) = ctx.selected_square
-        && board[(x, y)].is_some() {
-
+        && board[(x, y)].is_some()
+    {
         draw_circle_at(x, y, TL_GRAY);
     }
 
@@ -345,7 +375,6 @@ fn render(game: &Game, ctx: &GuiGame) {
         let (x, y) = board.find_king(game.turn).unwrap();
 
         draw_circle_at(x, y, TD_GRAY);
-
     }
 
     // draw the animations
@@ -393,7 +422,7 @@ fn handle_input(game: &mut Game, ctx: &mut GuiGame) {
                 .is_legal_move(selected, (x, y), Some(Promotion::Queen))
                 .is_ok()
         {
-            make_move(game, ctx, selected,(x, y), None, true);
+            make_move(game, ctx, selected, (x, y), None, true);
             ctx.selected_square = None;
         }
 
@@ -402,7 +431,14 @@ fn handle_input(game: &mut Game, ctx: &mut GuiGame) {
 }
 
 // Transfers to promotion mode in case of promotion when None is passed in
-fn make_move(game: &mut Game, ctx: &mut GuiGame, from: Pos, to: Pos, promotion: Option<Promotion>, skip_primary: bool) {
+fn make_move(
+    game: &mut Game,
+    ctx: &mut GuiGame,
+    from: Pos,
+    to: Pos,
+    promotion: Option<Promotion>,
+    skip_primary: bool,
+) {
     // get the effects
     let effects = game.get_move_effects(from, to, promotion);
     let result = game.move_checked(from, to, promotion);
