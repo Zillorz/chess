@@ -50,6 +50,7 @@ impl ThreadedUci {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn new_delay(min_time: Duration) -> Self {
         let (s, rx) = std::sync::mpsc::channel();
         let (s2, rx2) = std::sync::mpsc::channel();
@@ -254,7 +255,7 @@ impl Limits {
 
         // default limit will be depth 20
         if ret.is_empty() {
-            ret.push_str("depth 20");
+            ret.push_str("movetime 500");
         }
 
         ret

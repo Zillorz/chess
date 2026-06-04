@@ -351,7 +351,7 @@ fn render(game: &Game, ctx: &GuiGame) {
             square_size / 3.,
             0.,
             c,
-        )
+        );
     };
 
     // show selected square

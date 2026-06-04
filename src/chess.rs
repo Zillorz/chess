@@ -192,7 +192,6 @@ impl Default for Board {
 }
 
 impl Board {
-    #[allow(unused)]
     fn from_fen_board(fen_board: &str) -> Option<Board> {
         let rows = fen_board.split('/').rev().flat_map(|x| x.chars());
 
@@ -212,7 +211,6 @@ impl Board {
         Some(Board(b))
     }
 
-    #[allow(unused)]
     fn into_fen_board(self) -> String {
         let mut str = String::new();
 
@@ -469,7 +467,6 @@ enum Legality {
 
 impl Game {
     // creates fen representation of game
-    #[allow(unused)]
     pub(crate) fn as_fen(&self) -> String {
         let mut fen = self.board.into_fen_board();
 
