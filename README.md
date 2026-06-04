@@ -24,12 +24,10 @@ the engine is any uci compatible engine, called from uci.bat/uci.sh
 
 release build is setup with MAIA 1900, an engine meant to act like a human player with around 1900 elo
 
-
 ### Preview:
 <img width="596" height="465" alt="Screenshot 2026-06-03 212623" src="https://github.com/user-attachments/assets/8adf5510-1e76-4d3f-8633-7c6ca92c4b1a" />
 
-https://github.com/user-attachments/assets/b4fa20bd-4202-4fe9-97fa-173e48b658f7
-(don't analyze this game)
+<video src="https://github.com/user-attachments/assets/71db86db-a2b3-47a8-a6d0-ecb1eb5146c3" width="1024" height="1024" autoplay loop muted></video>
 
 ### Building
 On windows, either provide the texture files and engine or download them from the newest release.
