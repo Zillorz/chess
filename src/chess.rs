@@ -627,7 +627,7 @@ impl Game {
             // when moving 2, nothing can be in between the two locations
             // and pawn must be on inital rank
             let single_trace = self.board[(ox, oy + ry.signum())].is_none();
-            let double = ary == 2
+            let double = arx == 0 && ary == 2
                 && ((piece == Piece::BPawn && oy == 6) || (piece == Piece::WPawn && oy == 1))
                 && single_trace
                 && !occupied;

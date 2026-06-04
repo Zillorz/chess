@@ -1,5 +1,5 @@
 #![warn(clippy::pedantic)]
-// #![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 mod chess;
 mod uci;
@@ -13,6 +13,7 @@ use crate::uci::{Limits, ThreadedUci};
 use macroquad::prelude::*;
 use macroquad::ui::{Skin, root_ui};
 
+const TL_GRAY: Color = Color::new(0.20, 0.20, 0.20, 0.2);
 const TD_GRAY: Color = Color::new(0.10, 0.10, 0.10, 0.4);
 const TD_RED: Color = Color::new(0.92, 0.20, 0.20, 0.5);
 
@@ -321,18 +322,20 @@ fn render(game: &Game, ctx: &GuiGame) {
         );
     }
 
+    let draw_circle_at = |x, y, c| draw_poly(ctx.get_px(x) + square_size / 2., ctx.get_py(y) + square_size / 2., 255, square_size / 3., 0., c);
+
+    // show selected square
+    if let Some((x, y)) = ctx.selected_square
+        && board[(x, y)].is_some() {
+
+        draw_circle_at(x, y, TL_GRAY);
+    }
+
     // render checks, unless animation is present
     if game.is_in_check(game.turn) && ctx.animations.iter().all(|a| !a.prevent_king_decoration()) {
         let (x, y) = board.find_king(game.turn).unwrap();
 
-        draw_poly(
-            ctx.get_px(x) + square_size / 2.,
-            ctx.get_py(y) + square_size / 2.,
-            255,
-            square_size / 3.,
-            0.,
-            TD_RED,
-        );
+        draw_circle_at(x, y, TD_RED);
     }
 
     // render draw, unless animation is present
@@ -341,14 +344,8 @@ fn render(game: &Game, ctx: &GuiGame) {
     {
         let (x, y) = board.find_king(game.turn).unwrap();
 
-        draw_poly(
-            ctx.get_px(x) + square_size / 2.,
-            ctx.get_py(y) + square_size / 2.,
-            255,
-            square_size / 3.,
-            0.,
-            TD_GRAY,
-        );
+        draw_circle_at(x, y, TD_GRAY);
+
     }
 
     // draw the animations

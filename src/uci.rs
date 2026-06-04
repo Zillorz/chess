@@ -164,9 +164,8 @@ impl Uci {
                         'n' => Some(Promotion::Knight),
                         'r' => Some(Promotion::Rook),
                         'b' => Some(Promotion::Bishop),
-                        '+' | '#' => None,
                         c => {
-                            eprintln!("Unknown promotion letter, '{c}'");
+                            // eprintln!("Unknown promotion letter, '{c}'");
                             None
                         }
                     }
