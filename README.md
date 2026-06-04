@@ -28,11 +28,14 @@ release build is setup with MAIA 1900, an engine meant to act like a human playe
 
 ### Preview:
 
-![image](https://user-images.githubusercontent.com/78161200/231024568-39055bd8-e8ae-4a7f-b516-4cbf2aa3ef51.png)
 
-![output](https://user-images.githubusercontent.com/78161200/231025973-992ef953-dcf1-43f7-a004-9a595cdaadf4.gif)
-Blurry lines are a product of gif compression, they don't show in the application
 
+
+
+<img width="596" height="465" alt="Screenshot 2026-06-03 212623" src="https://github.com/user-attachments/assets/8adf5510-1e76-4d3f-8633-7c6ca92c4b1a" />
+
+https://github.com/user-attachments/assets/b4fa20bd-4202-4fe9-97fa-173e48b658f7
+(don't analyze this game)
 
 ### Building
 On windows, either provide the texture files and engine or download them from the newest release.
