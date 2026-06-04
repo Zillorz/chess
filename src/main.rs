@@ -9,6 +9,7 @@ use macroquad::{Error, hash};
 use std::collections::HashMap;
 
 use crate::chess::{BoardIter, Game, MoveEffects, MoveResult, Piece, Pos, Promotion};
+use crate::uci::{Limits, ThreadedUci};
 use macroquad::prelude::*;
 use macroquad::ui::{Skin, root_ui};
 
@@ -93,6 +94,7 @@ struct GuiGame {
 
     two_player: bool,
     player_color: chess::Color,
+    uci: Option<ThreadedUci>,
 
     complete: bool,
 
@@ -134,6 +136,12 @@ impl GuiGame {
         let light_square_texture = load_texture("assets/square_1.png").await?;
         let dark_square_texture = load_texture("assets/square_2.png").await?;
 
+        let uci = if two_player {
+            None
+        } else {
+            Some(ThreadedUci::new())
+        };
+
         Ok(GuiGame {
             piece_textures,
             sounds,
@@ -148,6 +156,7 @@ impl GuiGame {
 
             two_player,
             player_color,
+            uci,
 
             complete: false,
 
@@ -204,11 +213,19 @@ async fn play_game(two_player: bool, player_color: chess::Color, flipped: bool) 
     loop {
         let size = f32::min(screen_height(), screen_width());
         ctx.size = size;
+        if let Some(uci) = &ctx.uci
+            && let Some((from, to, prom, _)) = uci.try_result()
+            && !ctx.two_player
+            && game.turn != ctx.player_color
+        {
+            make_move(&mut game, &mut ctx, from, to, prom, false);
+        }
 
         ctx.animations
             .retain_mut(|animation| !animation.tick(get_frame_time()));
 
         render(&game, &ctx);
+
         if !ctx.complete {
             if let Some(promotion) = ctx.promotion {
                 handle_promotion(&mut game, &mut ctx, promotion);
@@ -357,16 +374,15 @@ fn handle_input(game: &mut Game, ctx: &mut GuiGame) {
             .is_legal_move(selected, (x, y), Some(Promotion::Queen))
             .is_ok()
     {
-        make_move(game, ctx, selected, (x, y), false);
+        make_move(game, ctx, selected, (x, y), None, false);
+        ctx.selected_square = None;
     }
 
     // if the mouse button is held and no piece is held, hold a piece
     if is_mouse_button_down(MouseButton::Left) {
         if !ctx.held
-            && ctx
-                .animations
-                .iter()
-                .all(|a| a.prevent_drawing() != (x, y))
+            && (ctx.two_player || ctx.player_color == game.turn)
+            && ctx.animations.iter().all(|a| a.prevent_drawing() != (x, y))
         {
             ctx.held = true;
             ctx.selected_square = Some((x, y));
@@ -380,18 +396,19 @@ fn handle_input(game: &mut Game, ctx: &mut GuiGame) {
                 .is_legal_move(selected, (x, y), Some(Promotion::Queen))
                 .is_ok()
         {
-            make_move(game, ctx, selected, (x, y), true);
+            make_move(game, ctx, selected,(x, y), None, true);
+            ctx.selected_square = None;
         }
 
         ctx.held = false;
     }
 }
 
-// Transfers to promotion mode in case of promotion, do not use in promotion
-fn make_move(game: &mut Game, ctx: &mut GuiGame, from: Pos, to: Pos, skip_primary: bool) {
+// Transfers to promotion mode in case of promotion when None is passed in
+fn make_move(game: &mut Game, ctx: &mut GuiGame, from: Pos, to: Pos, promotion: Option<Promotion>, skip_primary: bool) {
     // get the effects
-    let effects = game.get_move_effects(from, to, None);
-    let result = game.move_checked(from, to, None);
+    let effects = game.get_move_effects(from, to, promotion);
+    let result = game.move_checked(from, to, promotion);
 
     // do the move, changing to promotion state if necessary
     if result == MoveResult::MissingPromotion {
@@ -405,6 +422,13 @@ fn make_move(game: &mut Game, ctx: &mut GuiGame, from: Pos, to: Pos, skip_primar
             game.board.find_king(game.turn),
             skip_primary,
         );
+
+        if let Some(uci) = &ctx.uci
+            && !ctx.two_player
+            && game.turn != ctx.player_color
+        {
+            uci.recommend_move(*game, Limits::default());
+        }
     }
 }
 
@@ -473,18 +497,7 @@ fn handle_promotion(
         if (0..4).contains(&idx) {
             let promotion = Some(PROMOTIONS[idx.cast_unsigned()]);
 
-            let effects = game.get_move_effects(from, to, promotion);
-            let result = game.move_checked(from, to, promotion);
-
-            play_sounds(ctx, effects.as_ref(), result);
-            add_animations(
-                &mut ctx.animations,
-                effects.as_ref(),
-                result,
-                game.board.find_king(game.turn),
-                skip_primary,
-            );
-
+            make_move(game, ctx, from, to, promotion, skip_primary);
             ctx.promotion = None;
         }
     }

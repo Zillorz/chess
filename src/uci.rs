@@ -5,6 +5,7 @@ use std::num::{NonZeroU8, NonZeroU64};
 use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender};
+use crate::chess::Pos;
 use crate::{Game, chess::Promotion};
 use std::time::{Duration, Instant};
 
@@ -21,7 +22,7 @@ pub(crate) enum Message {
 }
 
 pub(crate) enum ResultMessage {
-    Result((usize, usize, Option<Promotion>, String)),
+    Result((Pos, Pos, Option<Promotion>, String)),
 }
 
 impl ThreadedUci {
@@ -85,7 +86,7 @@ impl ThreadedUci {
             .unwrap();
     }
 
-    pub(crate) fn try_result(&self) -> Option<(usize, usize, Option<Promotion>, String)> {
+    pub(crate) fn try_result(&self) -> Option<(Pos, Pos, Option<Promotion>, String)> {
         if let Ok(ResultMessage::Result(ret)) = self.receiver.try_recv() {
             return Some(ret);
         }
@@ -132,7 +133,7 @@ impl Uci {
         &mut self,
         game: &Game,
         limits: Limits,
-    ) -> (usize, usize, Option<Promotion>, String) {
+    ) -> (Pos, Pos, Option<Promotion>, String) {
         let stdin = self.process.stdin.as_mut().unwrap();
         let fen = game.as_fen();
 
@@ -151,11 +152,11 @@ impl Uci {
                 let alg_move = parts.nth(1).unwrap();
                 let mut iter = alg_move.chars();
 
-                let x1 = iter.next().unwrap() as usize - 'a' as usize;
-                let y1 = (iter.next().unwrap() as usize - '1' as usize) * 8;
+                let x1 = iter.next().unwrap() as isize - 'a' as isize;
+                let y1 = iter.next().unwrap() as isize - '1' as isize;
 
-                let x2 = iter.next().unwrap() as usize - 'a' as usize;
-                let y2 = (iter.next().unwrap() as usize - '1' as usize) * 8;
+                let x2 = iter.next().unwrap() as isize - 'a' as isize;
+                let y2 = iter.next().unwrap() as isize - '1' as isize;
 
                 let promotion = if let Some(p) = iter.next() {
                     match p {
@@ -163,6 +164,7 @@ impl Uci {
                         'n' => Some(Promotion::Knight),
                         'r' => Some(Promotion::Rook),
                         'b' => Some(Promotion::Bishop),
+                        '+' | '#' => None,
                         c => {
                             eprintln!("Unknown promotion letter, '{c}'");
                             None
@@ -172,7 +174,7 @@ impl Uci {
                     None
                 };
 
-                return (y1 + x1, y2 + x2, promotion, alg_move.to_string());
+                return ((x1, y1), (x2, y2), promotion, alg_move.to_string());
             }
         }
     }
